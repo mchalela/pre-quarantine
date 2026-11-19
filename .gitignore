@@ -1,0 +1,7 @@
+# Never commit what strangers send, or converted copies of it.
+QUARANTINE/*
+!QUARANTINE/.gitkeep
+CLEAN/*
+!CLEAN/.gitkeep
+
+.claude/settings.local.json

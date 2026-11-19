@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(./QUARANTINE/**)",
+      "Edit(./QUARANTINE/**)",
+      "Write(./QUARANTINE/**)",
+      "Edit(./tools/**)",
+      "Edit(./.claude/**)",
+      "Edit(./CLAUDE.md)",
+      "WebFetch",
+      "WebSearch"
+    ],
+    "allow": [
+      "Bash(./tools/q-inspect.sh:*)",
+      "Bash(./tools/q-convert.sh:*)",
+      "Bash(./tools/q-extract.sh:*)",
+      "Bash(ls:*)",
+      "Read(./CLEAN/**)"
+    ]
+  }
+}
