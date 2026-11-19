@@ -22,7 +22,7 @@ Being in the docker group is equivalent to having root on the machine. That is t
 **2. The tools**
 
 ```bash
-git clone <this repo> ~/Pre-Quarantine && cd ~/Pre-Quarantine
+git clone https://github.com/mchalela/pre-quarantine.git ~/Pre-Quarantine && cd ~/Pre-Quarantine
 chmod 700 .                      # keep other users out
 tools/build.sh                   # builds the tools image (uses the network)
 docker pull python:3.12-slim     # image used by tools/q-shell.sh, so the first run works offline
