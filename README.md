@@ -1,5 +1,7 @@
 # 🔒 Pre-Quarantine
 
+[![CI](https://github.com/mchalela/pre-quarantine/actions/workflows/ci.yml/badge.svg)](https://github.com/mchalela/pre-quarantine/actions/workflows/ci.yml)
+
 A place to look at files from senders you don't know or can't verify yet, without getting hacked.
 The rule behind everything here: **downloading and moving a file is safe; opening or running it is where the danger is.**
 
@@ -118,6 +120,24 @@ Then: "inspect and convert everything in QUARANTINE/sender and tell me what it i
 - **Does:** no network, no access to home, SSH keys, browser profiles or tokens; read-only system; no root capabilities; file arrives on stdin so it is never mounted.
 - **Does not:** stop a kernel-level container escape (rare and expensive, not spent on ordinary targets), or stop *you* from believing what a document says. A clean conversion of a phishing PDF is still a phishing PDF: don't follow its links, don't move the conversation off the platform you met on, don't install what it tells you to.
 - `text.txt` in `CLEAN/` is safe to open but is still the stranger's words.
+
+## Limits
+
+- **The verdict is a set of simple checks, not a malware scanner.** It looks at the real file type, the name, archive listings, and well-known active-content markers in PDF and Office files. A file can pass every check and still be hostile, which is why the next step after OK is still "convert", never "open".
+- **Legacy Office formats (.doc, .xls, .ppt) are checked only by a text search for macro markers.** Treat them with more suspicion than the newer formats.
+- **Archives are listed and extracted inside the container, but onto your disk.** A very large expansion is flagged, not prevented.
+- **Linux only**, and it relies on Docker's isolation. Anyone who can use Docker on a machine is effectively an administrator of it.
+- **For documents alone, [Dangerzone](https://dangerzone.rocks) is the more rigorous tool**: it does the same pixel conversion with stronger isolation and a maintained team behind it. This repo covers the rest of the routine around it: finding out what a file really is, archives, untrusted repositories, and fencing in an AI helper.
+
+## Development
+
+```bash
+pip install -r tests/requirements.txt
+tools/build.sh
+pytest
+```
+
+The tests run the real scripts against files generated on the spot (no hostile samples are stored in the repo), and check the container's isolation directly: no network, no capabilities, read-only system, no view of the home directory. CI runs the same tests plus ShellCheck on every push.
 
 ## Upkeep
 
