@@ -7,14 +7,43 @@ The rule behind everything here: **downloading and moving a file is safe; openin
 
 ## Setup on a new machine
 
-Needs Linux, Docker usable without sudo, and bash.
+Needs Linux and bash. Written for Ubuntu with GNOME and Firefox; adapt the desktop steps elsewhere.
+
+**1. Docker**
+
+```bash
+sudo apt install docker.io
+sudo usermod -aG docker "$USER"     # then log out and back in
+docker run --rm hello-world         # must work without sudo
+```
+
+Being in the docker group is equivalent to having root on the machine. That is the usual trade-off on a personal computer; don't do it on a shared one.
+
+**2. The tools**
 
 ```bash
 git clone <this repo> ~/Pre-Quarantine && cd ~/Pre-Quarantine
-chmod 700 .            # keep other users out
-tools/build.sh         # builds the tools image; the only step that uses the network
-tools/demo-inspect.sh  # inert preview of what an inspection looks like
+chmod 700 .                      # keep other users out
+tools/build.sh                   # builds the tools image (uses the network)
+docker pull python:3.12-slim     # image used by tools/q-shell.sh, so the first run works offline
+tools/demo-inspect.sh            # inert preview of what an inspection looks like
 ```
+
+**3. Firefox** (Settings → General → Files and Applications). This is the first line of defence: a download must stay a download.
+
+- [ ] "Ask where to save files before downloading": ticked, so files go straight into `QUARANTINE/<job>/`.
+- [ ] Portable Document Format (PDF): **Save File**, not "Open in Firefox".
+- [ ] `vscode`: **Always ask**. Same for any other app link you don't need pages to launch (`mailto`, `whatsapp`, `zoommtg`).
+- [ ] "What should Firefox do with other files?": **Automatically save files**.
+
+**4. Desktop**
+
+- [ ] Desktop search: nothing to do. The `.trackerignore` file in this folder makes the GNOME indexer skip it. Don't add this folder under Settings → Search → Search Locations.
+- [ ] Thumbnails: the file manager previews files in any folder you open. Either never double-click inside `QUARANTINE/` and accept the sandboxed thumbnailer, or turn previews off: Files → menu → Preferences → Performance → Show Thumbnails → Never.
+- [ ] Optional folder icons, so the danger zone is obvious: right-click a folder → Properties → click the icon → pick from `/usr/share/icons/Yaru/256x256/`.
+  - `Pre-Quarantine`: `emblems/emblem-readonly.png` (padlock)
+  - `QUARANTINE`: `status/dialog-warning.png` (warning triangle)
+  - `CLEAN`: `emblems/emblem-default.png` (green check)
 
 `QUARANTINE/` and `CLEAN/` are ignored by git on purpose: never commit what strangers send you, or copies of it.
 
