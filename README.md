@@ -42,8 +42,9 @@ tools/demo-inspect.sh            # inert preview of what an inspection looks lik
 - [ ] Thumbnails: the file manager previews files in any folder you open. Either never double-click inside `QUARANTINE/` and accept the sandboxed thumbnailer, or turn previews off: Files → menu → Preferences → Performance → Show Thumbnails → Never.
 - [ ] Optional folder icons, so the danger zone is obvious: right-click a folder → Properties → click the icon → pick from `/usr/share/icons/Yaru/256x256/`.
   - `Pre-Quarantine`: `emblems/emblem-readonly.png` (padlock)
-  - `QUARANTINE`: `status/dialog-warning.png` (warning triangle)
-  - `CLEAN`: `emblems/emblem-default.png` (green check)
+  - `QUARANTINE`: `status/dialog-error.png` (red no-entry sign)
+  - `CLEAN`: `emblems/emblem-default.png` (green check mark)
+  - `tools` and `.claude`: leave the default folder icon
 
 `QUARANTINE/` and `CLEAN/` are ignored by git on purpose: never commit what strangers send you, or copies of it.
 
