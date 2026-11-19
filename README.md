@@ -1,4 +1,4 @@
-# Pre-Quarantine
+# 🔒 Pre-Quarantine
 
 A place to look at files from senders you don't know or can't verify yet, without getting hacked.
 The rule behind everything here: **downloading and moving a file is safe; opening or running it is where the danger is.**
@@ -54,8 +54,8 @@ Pre-Quarantine/
 ├── CLAUDE.md      rules for a helper agent (loaded automatically by Claude Code)
 ├── .claude/       hard permission blocks for the agent
 ├── tools/         scripts that handle files inside a locked-down container
-├── QUARANTINE/    untrusted originals. NEVER double-click anything in here
-└── CLEAN/         converted copies that are safe to open
+├── QUARANTINE/    ⛔ untrusted originals. NEVER double-click anything in here
+└── CLEAN/         ✅ converted copies that are safe to open
 ```
 
 ## The routine
@@ -63,7 +63,7 @@ Pre-Quarantine/
 1. In the browser's save dialog, save straight into `QUARANTINE/<sender>/`. One subfolder per sender.
 2. Open a terminal here: `cd ~/Pre-Quarantine`
 3. Always start with: `tools/q-inspect.sh QUARANTINE/<sender>/<file>`
-4. Read the last two lines. `verdict:` is OK (green), CAUTION (yellow) or STOP (red), and `next:` is the exact command to run. On STOP, delete the file. Whatever the verdict, never open the original: OK only means no known tricks were found.
+4. Read the last two lines. `verdict:` is 🟢 OK, 🟡 CAUTION or 🔴 STOP, and `next:` is the exact command to run. On STOP, delete the file. Whatever the verdict, never open the original: OK only means no known tricks were found.
 5. Look at the result in `CLEAN/`. Delete the original when you no longer need it.
 
 ## What to do with each kind of file
@@ -126,7 +126,7 @@ Then: "inspect and convert everything in QUARANTINE/sender and tell me what it i
 - This folder has a `.trackerignore` file so desktop search skips it. Don't browse `QUARANTINE/` in the file manager, or turn thumbnails off: Files → menu → Preferences → Performance → Show Thumbnails → Never.
 - If you think something did run on the host: disconnect, change passwords from another device (email first, then accounts that hold money), revoke GitHub and other tokens, rotate SSH keys.
 
-## Red flags that mean "walk away", whatever the file contains
+## 🚩 Red flags that mean "walk away", whatever the file contains
 
 - A request to clone and run a repo as a "quick test" before you have any established relationship with the sender.
 - A call or meeting that requires installing their own app, a "codec", a font, or a browser extension.
