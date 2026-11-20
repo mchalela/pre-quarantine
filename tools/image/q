@@ -30,7 +30,7 @@ category() {
   case "$mime" in
     application/pdf) echo pdf ;;
     image/svg+xml|text/html|application/xhtml+xml) echo markup ;;
-    image/*) echo image ;;
+    image/png|image/jpeg|image/gif|image/bmp|image/tiff|image/webp) echo image ;;   # other image/* stay "unknown"
     application/x-executable|application/x-pie-executable|application/x-sharedlib|application/x-dosexec|application/x-mach-binary|application/vnd.debian.binary-package|application/x-rpm|application/x-msi|application/x-ms-shortcut|application/x-ms-installer|application/vnd.microsoft.portable-executable|application/java-archive|application/x-java-applet|application/vnd.appimage|application/x-iso9660-image) echo executable ;;
     application/zip|application/x-tar|application/gzip|application/x-7z-compressed|application/x-rar*|application/vnd.rar|application/x-xz|application/x-bzip2|application/zstd|application/x-lzip) echo archive ;;
     text/x-shellscript|application/x-shellscript|text/x-python|text/x-script.python|application/javascript|text/javascript|text/x-perl|text/x-ruby|text/x-php|text/x-java|text/x-c|text/x-c++|text/x-lua|text/x-msdos-batch) echo code ;;
@@ -41,7 +41,7 @@ category() {
 
 # What the name claims it is.
 claimed() {
-  ext=$(printf '%s' "$name" | tr 'A-Z' 'a-z' | sed -n 's/.*\.\([a-z0-9]*\)$/\1/p')
+  ext=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -n 's/.*\.\([a-z0-9]*\)$/\1/p')
   case "$ext" in
     pdf) echo pdf ;;
     doc|docx|docm|xls|xlsx|xlsm|ppt|pptx|pptm|odt|ods|odp|rtf) echo office ;;
@@ -49,7 +49,7 @@ claimed() {
     svg|html|htm|xhtml) echo markup ;;
     zip|tar|gz|tgz|7z|rar|xz|bz2|zst) echo archive ;;
     txt|csv|json|md|log|yaml|yml|xml|tsv|ini|cfg|toml|tex|bib|rst) echo text ;;
-    py|sh|js|ts|ipynb|rb|pl|php|c|cpp|h|java|go|rs|m|r|lua|bat|ps1|ipynb) echo code ;;
+    py|sh|js|ts|ipynb|rb|pl|php|c|cpp|h|java|go|rs|m|r|lua|bat|ps1) echo code ;;
     exe|msi|deb|rpm|appimage|jar|run|bin|dll|scr|com|apk|iso|dmg) echo executable ;;
     desktop|lnk|url) echo launcher ;;
     *) echo "" ;;
@@ -66,7 +66,7 @@ case "$cmd" in
     cat_real=$(category); cat_name=$(claimed)
     # file(1) often calls short scripts "plain text": trust a code extension over that.
     if [ "$cat_name" = code ] && [ "$cat_real" = text ]; then cat_real=code; fi
-    verdict=OK; why=""; findings=""
+    verdict=OK; findings=""
     add() { findings="$findings  - $1
 "; }
     raise() { case "$verdict:$1" in OK:*|CAUTION:STOP) verdict=$1 ;; esac; }
@@ -84,7 +84,7 @@ case "$cmd" in
         *) raise STOP; add "name says ${cat_name}, contents are ${cat_real}: a disguised file" ;;
       esac
     fi
-    case "$(printf '%s' "$name" | tr 'A-Z' 'a-z')" in
+    case "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" in
       *.pdf.*|*.doc.*|*.docx.*|*.jpg.*|*.png.*|*.txt.*) raise STOP; add "double extension in the name" ;;
     esac
 
@@ -94,12 +94,18 @@ case "$cmd" in
       launcher)   raise STOP; add "launcher file: runs a command when opened" ;;
       pdf)
         mutool info /tmp/input 2>/dev/null | grep -E '^Pages:' | clean || true
+        # Names can hide inside compressed object streams, so also scan an expanded copy.
+        mutool clean -d /tmp/input /tmp/expanded.pdf >/dev/null 2>&1 || : > /tmp/expanded.pdf
         for k in /JavaScript /JS /OpenAction /AA /Launch /EmbeddedFile /RichMedia /XFA; do
-          n=$(grep -ac "$k" /tmp/input || true)
+          # Whole name only: "/AA" must not match a font called "/AAAAAA+Arial".
+          a=$(grep -acE "$k([^A-Za-z0-9+]|\$)" /tmp/input || true)
+          b=$(grep -acE "$k([^A-Za-z0-9+]|\$)" /tmp/expanded.pdf || true)
+          n=$a; [ "$b" -gt "$n" ] && n=$b
           if [ "$n" -gt 0 ]; then raise CAUTION; add "PDF marker $k ($n)"; fi
         done
-        n=$(grep -ac '/URI' /tmp/input || true); [ "$n" -gt 0 ] && row "links:" "$n (do not follow them)" || true
-        grep -aq '/Encrypt' /tmp/input && { raise CAUTION; add "PDF is encrypted"; } || true ;;
+        n=$(grep -ac '/URI' /tmp/input || true)
+        if [ "$n" -gt 0 ]; then row "links:" "$n (do not follow them)"; fi
+        if grep -aq '/Encrypt' /tmp/input; then raise CAUTION; add "PDF is encrypted"; fi ;;
       office)
         act=$(bsdtar -tf /tmp/input 2>/dev/null | grep -iE 'vbaProject|macros/|oleObject|activeX|\.bin$' | head -5 || true)
         if [ -n "$act" ]; then raise CAUTION; add "active content inside: $(printf '%s' "$act" | tr '\n' ' ' | clean)"; fi
@@ -115,8 +121,10 @@ case "$cmd" in
           raise STOP; add "password-protected archive (the usual way to slip past scanners)"; fi
         total=$(wc -l < /tmp/list)
         row "entries:" "$total"
+        bytes=$(bsdtar -tvf /tmp/input 2>/dev/null | awk '{s+=$5} END{printf "%.0f", s+0}')
+        if [ "${bytes:-0}" -gt 2147483648 ]; then raise CAUTION; add "expands to $((bytes/1048576)) MB: possible decompression bomb"; fi
         bsdtar -tvf /tmp/input 2>/dev/null | head -40 | clean | sed "s/^/  $D/;s/\$/$N/"
-        [ "$total" -gt 40 ] && echo "  $D... $((total-40)) more$N" || true
+        if [ "$total" -gt 40 ]; then echo "  $D... $((total-40)) more$N"; fi
         bad=$(grep -iE '\.(exe|scr|bat|cmd|com|msi|dll|lnk|desktop|appimage|deb|rpm|vbs|jse|wsf|hta|ps1|jar|apk|dmg|iso)$' /tmp/list | head -5 || true)
         if [ -n "$bad" ]; then raise STOP; add "contains executables or launchers: $(printf '%s' "$bad" | tr '\n' ' ' | clean)"; fi
         if grep -qE '(^|/)\.\./|^/' /tmp/list; then raise STOP; add "paths that try to write outside the folder"; fi
@@ -159,7 +167,7 @@ case "$cmd" in
           echo "Do not know how to convert '$mime'. Use q-inspect.sh, q-extract.sh or q-shell.sh."; exit 2
         fi ;;
     esac
-    echo "ok: $(ls /out | wc -l) file(s) written" ;;
+    echo "ok: $(find /out -type f | wc -l) file(s) written" ;;
   extract)
     bsdtar -xf /tmp/input -C /out --no-same-owner --no-same-permissions 2>&1 | head -50
     find /out -type l -delete                       # no symlinks pointing out of quarantine
