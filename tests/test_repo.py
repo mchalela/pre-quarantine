@@ -11,7 +11,7 @@ def ignored(path: str) -> bool:
 
 
 def test_quarantine_and_clean_contents_are_never_tracked():
-    assert ignored("QUARANTINE/sender/file.pdf") and ignored("CLEAN/file.pdf/page-001.png")
+    assert ignored("QUARANTINE/sender/file.pdf") and ignored("CLEAN/sender/file.pdf/page-001.png")
     assert not ignored("QUARANTINE/.gitkeep") and not ignored("CLEAN/.gitkeep")
     tracked = subprocess.run(["git", "ls-files", "QUARANTINE", "CLEAN"], cwd=REPO,
                              capture_output=True, text=True).stdout.split()

@@ -7,7 +7,7 @@ import samples
 def test_pdf_becomes_png_pages_and_text_in_clean(box):
     result = box.run("q-convert.sh", box.put("brief.pdf", samples.pdf("Hello quarantine")))
     assert result.returncode == 0, result.stdout + result.stderr
-    out = box.clean / "brief.pdf"
+    out = box.clean / "sender" / "brief.pdf"
     assert (out / "page-001.png").read_bytes().startswith(samples.PNG_MAGIC)
     assert "Hello quarantine" in (out / "text.txt").read_text()
 
@@ -15,14 +15,14 @@ def test_pdf_becomes_png_pages_and_text_in_clean(box):
 def test_docx_is_rendered_through_the_office_converter(box):
     result = box.run("q-convert.sh", box.put("notes.docx", samples.docx("Hello from docx")))
     assert result.returncode == 0, result.stdout + result.stderr
-    out = box.clean / "notes.docx"
+    out = box.clean / "sender" / "notes.docx"
     assert (out / "page-001.png").read_bytes().startswith(samples.PNG_MAGIC)
     assert "Hello from docx" in (out / "text.txt").read_text()
 
 
 def test_text_is_copied_as_text(box):
     box.run("q-convert.sh", box.put("data.csv", b"a,b\n1,2\n"))
-    assert (box.clean / "data.csv" / "content.txt").read_text() == "a,b\n1,2\n"
+    assert (box.clean / "sender" / "data.csv" / "content.txt").read_text() == "a,b\n1,2\n"
 
 
 def test_convert_never_changes_the_original(box):
@@ -40,8 +40,27 @@ def test_convert_refuses_an_executable_and_leaves_no_output_folder(box):
 
 
 def test_output_folder_name_is_sanitised(box):
-    box.run("q-convert.sh", box.put("we ird;$(x).csv", b"a\n"))
-    assert [p.name for p in box.clean.iterdir()] == ["we_ird___x_.csv"]
+    box.run("q-convert.sh", box.put("we ird;$(x).csv", b"a\n", sender="some one;$(y)"))
+    assert [p.name for p in box.clean.iterdir()] == ["some_one___y_"]
+    assert [p.name for p in (box.clean / "some_one___y_").iterdir()] == ["we_ird___x_.csv"]
+
+
+def test_same_file_name_from_two_senders_stays_separate(box):
+    box.run("q-convert.sh", box.put("cv.csv", b"first\n", sender="alpha"))
+    box.run("q-convert.sh", box.put("cv.csv", b"second\n", sender="beta"))
+    assert (box.clean / "alpha" / "cv.csv" / "content.txt").read_text() == "first\n"
+    assert (box.clean / "beta" / "cv.csv" / "content.txt").read_text() == "second\n"
+
+
+def test_only_the_sender_folder_is_mirrored_in_clean(box):
+    deep = box.put("deep.csv", b"a\n", sender="sender/pack.zip.extracted/inner")
+    box.run("q-convert.sh", deep)
+    assert (box.clean / "sender" / "deep.csv" / "content.txt").exists()
+    top = box.quarantine / "loose.csv"
+    top.write_bytes(b"a\n")
+    box.run("q-convert.sh", top)
+    assert (box.clean / "loose.csv" / "content.txt").exists()
+    assert sorted(p.name for p in box.clean.iterdir()) == ["loose.csv", "sender"]
 
 
 def test_extract_stays_in_quarantine_drops_symlinks_and_exec_bits(box):

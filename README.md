@@ -66,13 +66,13 @@ Pre-Quarantine/
 2. Open a terminal here: `cd ~/Pre-Quarantine`
 3. Always start with: `tools/q-inspect.sh QUARANTINE/<sender>/<file>`
 4. Read the last two lines. `verdict:` is 🟢 OK, 🟡 CAUTION or 🔴 STOP, and `next:` is the exact command to run. On STOP, delete the file. Whatever the verdict, never open the original: OK only means no known tricks were found.
-5. Look at the result in `CLEAN/`. Delete the original when you no longer need it.
+5. Look at the result in `CLEAN/<sender>/`. Delete the original when you no longer need it.
 
 ## What to do with each kind of file
 
 | File | Do this | Never |
 |---|---|---|
-| PDF | `tools/q-convert.sh <file>` then open the PNGs in `CLEAN/<name>/` | Double-click it |
+| PDF | `tools/q-convert.sh <file>` then open the PNGs in `CLEAN/<sender>/<name>/` | Double-click it |
 | Office: .docx .xlsx .pptx .doc .xls .rtf .odt | `tools/q-convert.sh <file>` | Open in LibreOffice, enable macros |
 | Macro files: .docm .xlsm .pptm | Same, and treat the sender with suspicion | |
 | Archive: .zip .tar.gz .7z .rar | `tools/q-inspect.sh` to list, `tools/q-extract.sh` to unpack. Result stays in `QUARANTINE/`; treat each file inside by its own type | Extract with the file manager |
@@ -81,7 +81,7 @@ Pre-Quarantine/
 | Launcher: .desktop .lnk .url | Delete. Inspect only if curious | |
 | SVG, HTML | `tools/q-inspect.sh`; read as text in the sandbox shell | Open in the browser |
 | Image: .png .jpg .gif | `tools/q-convert.sh` re-renders it, or open it in the browser | |
-| Text: .txt .csv .json .md | `tools/q-convert.sh` copies it to `CLEAN/`; open in a text editor | Open a .csv in LibreOffice Calc |
+| Text: .txt .csv .json .md | `tools/q-convert.sh` copies it to `CLEAN/<sender>/<name>/`; open in a text editor | Open a .csv in LibreOffice Calc |
 
 If the extension and the `type:` line from `q-inspect` disagree, believe `q-inspect` and be suspicious.
 
@@ -155,7 +155,7 @@ The tests run the real scripts against files generated on the spot (no hostile s
 
 - Rebuild the image once a month for security updates: `tools/build.sh` (the only step that uses the network).
 - To update: `git pull && tools/build.sh`, then `tools/install-agent-rules.sh` if you use a helper agent here.
-- Empty `QUARANTINE/` and `CLEAN/` when you are done with a sender's files.
+- Delete a sender's files when you are done with them. Converted copies keep the sender's subfolder, so from this folder, in a terminal: `rm -rf -- QUARANTINE/<sender> CLEAN/<sender>`. To empty both folders completely: `find QUARANTINE CLEAN -mindepth 1 ! -name .gitkeep -delete` (unlike `rm -rf QUARANTINE/*`, this also removes hidden files).
 - This folder has a `.trackerignore` file so desktop search skips it. Don't browse `QUARANTINE/` in the file manager, or turn thumbnails off: Files → menu → Preferences → Performance → Show Thumbnails → Never.
 - If you think something did run on the host: disconnect, change passwords from another device (email first, then accounts that hold money), revoke GitHub and other tokens, rotate SSH keys.
 

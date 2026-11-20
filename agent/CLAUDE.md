@@ -8,7 +8,7 @@ This folder exists so the user can look at files from strangers (unknown or unve
 2. **Never read a quarantined original directly.** No Read tool, no `cat`, `head`, `strings`, `xxd`, `python`, `unzip` or anything else on the host. The settings file blocks the Read and Edit tools there; do not route around it through the shell.
 3. **Only touch quarantined files through the scripts in `tools/`.** They run inside a container with no network, no capabilities, a read-only system and no view of the home directory.
    - `./tools/q-inspect.sh QUARANTINE/<file>`: real type, size, hash, archive listing, active-content markers, then a `verdict:` (OK, CAUTION, STOP) and a `next:` command. Always run it first. On STOP, do nothing further with the file and tell the user, who deletes it.
-   - `./tools/q-convert.sh QUARANTINE/<file>`: PDF, Office or image to PNG pages plus `text.txt` in `CLEAN/<name>/`.
+   - `./tools/q-convert.sh QUARANTINE/<file>`: PDF, Office or image to PNG pages plus `text.txt` in `CLEAN/<sender>/<name>/`.
    - `./tools/q-extract.sh QUARANTINE/<archive>`: unpack inside the container; the result stays in `QUARANTINE/` and is still untrusted.
 4. **Never run `tools/q-shell.sh` yourself, and never turn the network on.** That script is interactive and is for the user. If a task needs code to run, say so and let them decide.
 5. **Never execute, install, import, build or `git clone` anything from quarantine on the host.** No `pip install`, `npm install`, `make`, `pytest`, `pre-commit`, `bash script.sh`.
