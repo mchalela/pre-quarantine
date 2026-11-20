@@ -8,10 +8,11 @@ This folder exists so the user can look at files from strangers (unknown or unve
 2. **Never read a quarantined original directly.** No Read tool, no `cat`, `head`, `strings`, `xxd`, `python`, `unzip` or anything else on the host. The settings file blocks the Read and Edit tools there; do not route around it through the shell.
 3. **Only touch quarantined files through the scripts in `tools/`.** They run inside a container with no network, no capabilities, a read-only system and no view of the home directory.
    - `./tools/q-inspect.sh QUARANTINE/<file>`: real type, size, hash, archive listing, active-content markers, then a `verdict:` (OK, CAUTION, STOP) and a `next:` command. Always run it first. On STOP, do nothing further with the file and tell the user, who deletes it.
-   - `./tools/q-convert.sh QUARANTINE/<file>`: PDF, Office or image to PNG pages plus `text.txt` in `CLEAN/<sender>/<name>/`.
-   - `./tools/q-extract.sh QUARANTINE/<archive>`: unpack inside the container; the result stays in `QUARANTINE/` and is still untrusted.
+   - `./tools/q-convert.sh QUARANTINE/<file>`: PDF, Office or image to PNG pages plus `text.txt` in `CLEAN/<sender>/<name>/`. It refuses when that folder already exists; say so and let the user delete it.
+   - `./tools/q-extract.sh QUARANTINE/<archive>`: unpack inside the container; the result stays in `QUARANTINE/` and is still untrusted. It refuses an archive that unpacks to more than 2 GB or 100,000 entries. The `--big` option lifts that limit: never add it yourself, ask the user.
+   - If a script fails, refuses, or says a sandbox shell is open on the folder, stop and report what it printed. Do not look for another way to reach the file.
 4. **Never run `tools/q-shell.sh` yourself, and never turn the network on.** That script is interactive and is for the user. If a task needs code to run, say so and let them decide.
-5. **Never execute, install, import, build or `git clone` anything from quarantine on the host.** No `pip install`, `npm install`, `make`, `pytest`, `pre-commit`, `bash script.sh`.
+5. **Never execute, install, import, build or `git clone` anything from quarantine on the host.** No `pip install`, `npm install`, `make`, `pytest`, `pre-commit`, `bash script.sh`. No `git` command of any kind inside `QUARANTINE/` either: a repository's own config can make git run programs.
 6. **No web access from this folder.** Do not fetch URLs found in quarantined files. Report them as text, with the dots written as `[.]` if they look hostile.
 7. **Do not edit `tools/`, `agent/`, `.claude/` or this file, and never run `tools/install-agent-rules.sh`.** Do not move anything out of `QUARANTINE/` to another place on disk. The user does those things by hand.
 8. **Ask before anything not covered here.** A permission prompt in this folder is a feature. Never suggest switching to an auto-accept or bypass mode.

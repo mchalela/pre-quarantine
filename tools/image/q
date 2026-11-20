@@ -1,38 +1,46 @@
 #!/bin/sh
 # Runs INSIDE the container. The untrusted file arrives on stdin; results go to /out.
-# usage: q inspect|convert|extract [original-file-name]      env: Q_COLOR=1, Q_PATH, Q_DIR (shell-quoted host paths)
+# usage: q inspect|convert|extract [original-file-name]      env: Q_BIG=1 (extract: no size limit)
+# Prints plain text only. The script on the host filters it again and adds the colours, the verdict
+# line and the next step itself, so nothing in here can hand the user a command or drive the terminal.
 set -eu
+exec 2>&1
 cmd="${1:-}"; name="${2:-input}"
 cat > /tmp/input
 mime=$(file -b --mime-type /tmp/input)
-ftype=$(file -b /tmp/input | cut -c1-160)
 
-if [ "${Q_COLOR:-0}" = 1 ]; then
-  R=$(printf '\033[1;31m'); G=$(printf '\033[1;32m'); Y=$(printf '\033[1;33m'); C=$(printf '\033[36m')
-  B=$(printf '\033[1m'); D=$(printf '\033[2m'); N=$(printf '\033[0m')
-else R=; G=; Y=; C=; B=; D=; N=; fi
-clean() { sed 's/[[:cntrl:]]/?/g'; }                 # never let file contents drive the terminal
-row() { printf '%s%-8s%s %s\n' "$B" "$1" "$N" "$2"; }
+MAX_BYTES=2147483648   # an archive that unpacks to more than this (2 GiB) is treated as a possible bomb
+MAX_ENTRIES=100000     # and so is one with more entries than this
+MAX_PAGES=500          # pages converted per document
+MAX_TEXT=5000000       # bytes copied from a text file
+
+# File contents and names are bytes, not text. Without LC_ALL=C a single invalid UTF-8 byte hides
+# the rest of its line from grep, and a control character can slip past a character class.
+bgrep() { LC_ALL=C grep "$@"; }
+clean() { LC_ALL=C tr -c '\n\040-\176' '?'; }   # printable ASCII only: file contents never drive the terminal
+flat()  { LC_ALL=C tr -c '\040-\176' '?'; }     # the same, and kept on one line
+row()   { printf '%-8s %s\n' "$1" "$2"; }
 
 is_office() {
   case "$mime" in
-    application/msword|application/vnd.ms-*|application/vnd.openxmlformats-*|application/vnd.oasis.opendocument.*|text/rtf|application/rtf) return 0 ;;
+    application/msword|application/vnd.ms-word*|application/vnd.ms-excel*|application/vnd.ms-powerpoint*|application/vnd.ms-office|application/vnd.openxmlformats-*|application/vnd.oasis.opendocument.*|text/rtf|application/rtf) return 0 ;;
     application/zip|application/octet-stream)
-      bsdtar -tf /tmp/input 2>/dev/null | grep -qE '^(word/|xl/|ppt/|\[Content_Types\]\.xml|content\.xml)' ;;
+      bsdtar -tf /tmp/input 2>/dev/null | bgrep -qE '^(word/|xl/|ppt/|\[Content_Types\]\.xml|content\.xml)' ;;
     *) return 1 ;;
   esac
 }
 
 # What the bytes really are.
 category() {
-  if head -c 400 /tmp/input | grep -aq '^\[Desktop Entry\]'; then echo launcher; return; fi
+  if head -c 400 /tmp/input | bgrep -aqE '^\[(Desktop Entry|InternetShortcut)\]'; then echo launcher; return; fi
   if is_office; then echo office; return; fi
   case "$mime" in
     application/pdf) echo pdf ;;
     image/svg+xml|text/html|application/xhtml+xml) echo markup ;;
     image/png|image/jpeg|image/gif|image/bmp|image/tiff|image/webp) echo image ;;   # other image/* stay "unknown"
-    application/x-executable|application/x-pie-executable|application/x-sharedlib|application/x-dosexec|application/x-mach-binary|application/vnd.debian.binary-package|application/x-rpm|application/x-msi|application/x-ms-shortcut|application/x-ms-installer|application/vnd.microsoft.portable-executable|application/java-archive|application/x-java-applet|application/vnd.appimage|application/x-iso9660-image) echo executable ;;
-    application/zip|application/x-tar|application/gzip|application/x-7z-compressed|application/x-rar*|application/vnd.rar|application/x-xz|application/x-bzip2|application/zstd|application/x-lzip) echo archive ;;
+    application/x-mswinurl) echo launcher ;;
+    application/x-executable|application/x-pie-executable|application/x-sharedlib|application/x-dosexec|application/x-mach-binary|application/vnd.debian.binary-package|application/x-rpm|application/x-msi|application/x-ms-shortcut|application/x-ms-installer|application/vnd.microsoft.portable-executable|application/java-archive|application/x-java-applet|application/vnd.appimage|application/x-iso9660-image|application/vnd.ms-htmlhelp) echo executable ;;
+    application/zip|application/x-tar|application/gzip|application/x-7z-compressed|application/x-rar*|application/vnd.rar|application/x-xz|application/x-bzip2|application/zstd|application/x-lzip|application/vnd.ms-cab-compressed) echo archive ;;
     text/x-shellscript|application/x-shellscript|text/x-python|text/x-script.python|application/javascript|text/javascript|text/x-perl|text/x-ruby|text/x-php|text/x-java|text/x-c|text/x-c++|text/x-lua|text/x-msdos-batch) echo code ;;
     application/json|text/*|application/csv|inode/x-empty) echo text ;;
     *) echo unknown ;;
@@ -40,25 +48,48 @@ category() {
 }
 
 # What the name claims it is.
+lower=$(printf '%s' "$name" | LC_ALL=C tr '[:upper:]' '[:lower:]')
 claimed() {
-  ext=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -n 's/.*\.\([a-z0-9]*\)$/\1/p')
+  case "$lower" in *.*) ext="${lower##*.}" ;; *) ext="" ;; esac
   case "$ext" in
     pdf) echo pdf ;;
     doc|docx|docm|xls|xlsx|xlsm|ppt|pptx|pptm|odt|ods|odp|rtf) echo office ;;
     png|jpg|jpeg|gif|bmp|tif|tiff|webp) echo image ;;
     svg|html|htm|xhtml) echo markup ;;
-    zip|tar|gz|tgz|7z|rar|xz|bz2|zst) echo archive ;;
+    zip|tar|gz|tgz|7z|rar|xz|bz2|zst|cab) echo archive ;;
     txt|csv|json|md|log|yaml|yml|xml|tsv|ini|cfg|toml|tex|bib|rst) echo text ;;
     py|sh|js|ts|ipynb|rb|pl|php|c|cpp|h|java|go|rs|m|r|lua|bat|ps1) echo code ;;
-    exe|msi|deb|rpm|appimage|jar|run|bin|dll|scr|com|apk|iso|dmg) echo executable ;;
+    exe|msi|deb|rpm|appimage|jar|run|bin|dll|scr|com|apk|iso|dmg|chm) echo executable ;;
     desktop|lnk|url) echo launcher ;;
     *) echo "" ;;
   esac
 }
 
-render_pdf() {  # $1 = pdf or image path
-  mutool draw -r 110 -o /out/page-%03d.png "$1" 2>/tmp/err || { cat /tmp/err; echo "render failed"; exit 1; }
-  mutool draw -F txt -o /out/text.txt "$1" 2>/dev/null || true
+# How much an archive really unpacks to, counted while unpacking to nowhere and cut off just past
+# the limit. The sizes shown in a listing are whatever the sender wrote there.
+unpacked_bytes() { bsdtar -xOf /tmp/input 2>/tmp/xerr | head -c "$((MAX_BYTES + 1))" | wc -c; }
+
+# Lines that match $1 in the PDF as sent or in its unpacked copy, whichever has more.
+pdf_count() {
+  a=$(bgrep -acE "$1" /tmp/input || true); b=$(bgrep -acE "$1" /tmp/expanded.pdf || true)
+  if [ "$b" -gt "$a" ]; then echo "$b"; else echo "$a"; fi
+}
+
+render() {  # $1 = PDF or image
+  mutool draw -r 110 -o /out/page-%03d.png "$1" "1-$((MAX_PAGES + 1))" 2>/tmp/err ||
+    { clean < /tmp/err | head -n 20; echo "render failed"; exit 1; }
+  if [ -e "/out/page-$((MAX_PAGES + 1)).png" ]; then
+    rm -f "/out/page-$((MAX_PAGES + 1)).png"
+    echo "note: this document is longer than $MAX_PAGES pages; only the first $MAX_PAGES were converted"
+  fi
+  mutool draw -F txt -o /out/text.txt "$1" "1-$MAX_PAGES" 2>/dev/null || true
+}
+
+office_to_pdf() {  # leaves /tmp/lo/input.pdf
+  mkdir -p /tmp/lo
+  soffice -env:UserInstallation=file:///tmp/lo-profile --headless --norestore \
+    --convert-to pdf --outdir /tmp/lo /tmp/input >/tmp/lo.log 2>&1 || true
+  if [ ! -f /tmp/lo/input.pdf ]; then clean < /tmp/lo.log | head -n 20; echo "office conversion failed"; exit 1; fi
 }
 
 case "$cmd" in
@@ -71,11 +102,11 @@ case "$cmd" in
 "; }
     raise() { case "$verdict:$1" in OK:*|CAUTION:STOP) verdict=$1 ;; esac; }
 
-    row "file:"   "$(printf '%s' "$name" | clean)"
-    row "type:"   "$(printf '%s' "$ftype" | clean)"
+    row "file:"   "$(printf '%s' "$name" | flat)"
+    row "type:"   "$(printf '%s' "$(file -b /tmp/input)" | flat | cut -c1-160)"
     row "mime:"   "$mime"
     row "size:"   "$(wc -c < /tmp/input) bytes"
-    row "sha256:" "$D$(sha256sum /tmp/input | cut -d' ' -f1)$N"
+    row "sha256:" "$(sha256sum /tmp/input | cut -d' ' -f1)"
 
     # 1. Does the name lie about the contents?  (ipynb/json/xml and friends are all "text" to file(1))
     if [ -n "$cat_name" ] && [ "$cat_name" != "$cat_real" ]; then
@@ -84,8 +115,16 @@ case "$cmd" in
         *) raise STOP; add "name says ${cat_name}, contents are ${cat_real}: a disguised file" ;;
       esac
     fi
-    case "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" in
-      *.pdf.*|*.doc.*|*.docx.*|*.jpg.*|*.png.*|*.txt.*) raise STOP; add "double extension in the name" ;;
+    case "$lower" in
+      *.gz|*.xz|*.bz2|*.zst|*.zip|*.7z|*.rar|*.tar|*.tgz) : ;;   # a compressed document is ordinary
+      *.pdf.*|*.doc.*|*.docx.*|*.xls.*|*.xlsx.*|*.ppt.*|*.pptx.*|*.odt.*|*.ods.*|*.odp.*|*.rtf.*|*.jpg.*|*.jpeg.*|*.png.*|*.gif.*|*.txt.*|*.csv.*)
+        raise STOP; add "double extension in the name" ;;
+    esac
+    # Unicode marks that override the reading direction (U+202A-202E, U+2066-2069) make "exe.pdf"
+    # out of "fdp.exe" on screen. Looked for as bytes, so no locale or regex is involved.
+    case " $(printf '%s' "$name" | od -An -tx1 | tr -s ' \n' ' ')" in
+      *" e2 80 a"[a-e]" "*|*" e2 81 a"[6-9]" "*)
+        raise STOP; add "the name hides direction marks, a trick to disguise the real extension" ;;
     esac
 
     # 2. Per type.
@@ -93,42 +132,58 @@ case "$cmd" in
       executable) raise STOP; add "this is a program or installer, not a document" ;;
       launcher)   raise STOP; add "launcher file: runs a command when opened" ;;
       pdf)
-        mutool info /tmp/input 2>/dev/null | grep -E '^Pages:' | clean || true
-        # Names can hide inside compressed object streams, so also scan an expanded copy.
-        mutool clean -d /tmp/input /tmp/expanded.pdf >/dev/null 2>&1 || : > /tmp/expanded.pdf
-        for k in /JavaScript /JS /OpenAction /AA /Launch /EmbeddedFile /RichMedia /XFA; do
+        mutool info /tmp/input 2>/dev/null | bgrep -aE '^Pages:' | head -n 1 | clean || true
+        # Names can hide inside compressed object streams or behind #xx escapes, so also scan a copy
+        # that mutool has rewritten in plain form (-i -f: images and fonts stay packed, they hold no names).
+        if ! mutool clean -d -i -f /tmp/input /tmp/expanded.pdf >/dev/null 2>/tmp/cerr; then
+          # A file can be built to break this step. That must never read as "nothing found".
+          raise CAUTION; add "could not unpack this PDF completely: it may hide active content"
+          mutool clean /tmp/input /tmp/expanded.pdf >/dev/null 2>&1 || : > /tmp/expanded.pdf
+        fi
+        for k in /JavaScript /JS /OpenAction /AA /Launch /EmbeddedFile /EF /RichMedia /XFA /GoToR /GoToE /SubmitForm /ImportData; do
           # Whole name only: "/AA" must not match a font called "/AAAAAA+Arial".
-          a=$(grep -acE "$k([^A-Za-z0-9+]|\$)" /tmp/input || true)
-          b=$(grep -acE "$k([^A-Za-z0-9+]|\$)" /tmp/expanded.pdf || true)
-          n=$a; [ "$b" -gt "$n" ] && n=$b
+          n=$(pdf_count "$k([^A-Za-z0-9+]|\$)")
           if [ "$n" -gt 0 ]; then raise CAUTION; add "PDF marker $k ($n)"; fi
         done
-        n=$(grep -ac '/URI' /tmp/input || true)
+        n=$(pdf_count '/URI')
         if [ "$n" -gt 0 ]; then row "links:" "$n (do not follow them)"; fi
-        if grep -aq '/Encrypt' /tmp/input; then raise CAUTION; add "PDF is encrypted"; fi ;;
+        if bgrep -aq '/Encrypt' /tmp/input || bgrep -aqi 'password' /tmp/cerr ||
+           mutool show /tmp/input trailer 2>/dev/null | bgrep -aq '/Encrypt'; then
+          raise CAUTION; add "PDF is encrypted"; fi ;;
       office)
-        act=$(bsdtar -tf /tmp/input 2>/dev/null | grep -iE 'vbaProject|macros/|oleObject|activeX|\.bin$' | head -5 || true)
-        if [ -n "$act" ]; then raise CAUTION; add "active content inside: $(printf '%s' "$act" | tr '\n' ' ' | clean)"; fi
+        act=$(bsdtar -tf /tmp/input 2>/dev/null | bgrep -iE 'vbaProject|macros/|macrosheets/|oleObject|activeX|(^|/)(Basic|Scripts)/|\.bin$' | head -n 5 || true)
+        if [ -n "$act" ]; then raise CAUTION; add "active content inside: $(printf '%s' "$act" | tr '\n' ' ' | flat)"; fi
         case "$mime" in *macroenabled*|*macroEnabled*) raise CAUTION; add "macro-enabled format" ;; esac
-        if grep -aqE 'VBA|_VBA_PROJECT|Macros' /tmp/input 2>/dev/null && ! bsdtar -tf /tmp/input >/dev/null 2>&1; then
+        # Old binary formats keep their folder names as two-byte text, so drop the zero bytes before searching.
+        if ! bsdtar -tf /tmp/input >/dev/null 2>&1 && LC_ALL=C tr -d '\000' < /tmp/input | bgrep -aqE 'VBA|_VBA_PROJECT|Macros'; then
           raise CAUTION; add "legacy Office file that appears to contain macros"; fi
-        if bsdtar -xOf /tmp/input '*.rels' 2>/dev/null | grep -aqiE 'TargetMode="External"[^>]*(attachedTemplate|oleObject|frame)|(attachedTemplate|oleObject|frame)[^>]*TargetMode="External"'; then
-          raise CAUTION; add "loads a remote template or object"; fi ;;
+        # One relationship per line, whatever the quoting, spacing or encoding. Plain links are normal;
+        # anything else that points outside the file is fetched when the document opens.
+        n=$(bsdtar -xOf /tmp/input '*.rels' 2>/dev/null | LC_ALL=C tr -d '\000' | LC_ALL=C tr '\r\n\t>' '   \n' |
+            bgrep -aiE "TargetMode *= *[\"']External" | bgrep -aivcE "relationships/hyperlink[\"']" || true)
+        if [ "${n:-0}" -gt 0 ]; then raise CAUTION; add "loads content from outside the file: a remote template, object or linked data"; fi
+        case "$mime" in text/rtf|application/rtf)
+          if bgrep -aqE '\\(obj|template)' /tmp/input; then raise CAUTION; add "RTF with an embedded object or a template to load"; fi ;;
+        esac ;;
       archive)
-        if ! bsdtar -tf /tmp/input >/tmp/list 2>/tmp/lerr; then raise CAUTION; add "archive listing failed: $(head -1 /tmp/lerr | clean)"; fi
-        bsdtar -xOf /tmp/input >/dev/null 2>/tmp/xerr || true
-        if grep -qiE 'passphrase|encrypt|password' /tmp/xerr /tmp/lerr 2>/dev/null; then
+        if ! bsdtar -tf /tmp/input >/tmp/list 2>/tmp/lerr; then raise CAUTION; add "archive listing failed: $(head -n 1 /tmp/lerr | flat)"; fi
+        bytes=$(unpacked_bytes)
+        if bgrep -qiE 'passphrase|encrypt|password' /tmp/xerr /tmp/lerr 2>/dev/null; then
           raise STOP; add "password-protected archive (the usual way to slip past scanners)"; fi
         total=$(wc -l < /tmp/list)
         row "entries:" "$total"
-        bytes=$(bsdtar -tvf /tmp/input 2>/dev/null | awk '{s+=$5} END{printf "%.0f", s+0}')
-        if [ "${bytes:-0}" -gt 2147483648 ]; then raise CAUTION; add "expands to $((bytes/1048576)) MB: possible decompression bomb"; fi
-        bsdtar -tvf /tmp/input 2>/dev/null | head -40 | clean | sed "s/^/  $D/;s/\$/$N/"
-        if [ "$total" -gt 40 ]; then echo "  $D... $((total-40)) more$N"; fi
-        bad=$(grep -iE '\.(exe|scr|bat|cmd|com|msi|dll|lnk|desktop|appimage|deb|rpm|vbs|jse|wsf|hta|ps1|jar|apk|dmg|iso)$' /tmp/list | head -5 || true)
-        if [ -n "$bad" ]; then raise STOP; add "contains executables or launchers: $(printf '%s' "$bad" | tr '\n' ' ' | clean)"; fi
-        if grep -qE '(^|/)\.\./|^/' /tmp/list; then raise STOP; add "paths that try to write outside the folder"; fi
-        if grep -qiE '\.(py|js|ts|sh|ipynb|rb|php|go|rs)$|(^|/)(package\.json|setup\.py|pyproject\.toml|Makefile)$' /tmp/list; then
+        if [ "$bytes" -gt "$MAX_BYTES" ]; then raise CAUTION; add "unpacks to more than 2 GB: possible decompression bomb"; fi
+        if [ "$total" -gt "$MAX_ENTRIES" ]; then raise CAUTION; add "more than $MAX_ENTRIES entries: possible decompression bomb"; fi
+        bsdtar -tvf /tmp/input >/tmp/vlist 2>/dev/null || true
+        head -n 40 /tmp/vlist | clean | sed 's/^/  /'
+        if [ "$total" -gt 40 ]; then echo "  ... $((total-40)) more"; fi
+        bad=$(bgrep -iE '\.(exe|scr|bat|cmd|com|msi|dll|lnk|desktop|url|appimage|deb|rpm|vbs|jse|wsf|hta|chm|ps1|jar|apk|dmg|iso)$' /tmp/list | head -n 5 || true)
+        if [ -n "$bad" ]; then raise STOP; add "contains executables or launchers: $(printf '%s' "$bad" | tr '\n' ' ' | flat)"; fi
+        if bgrep -qE '(^|/)\.\.(/|$)|^/' /tmp/list; then raise STOP; add "paths that try to write outside the folder"; fi
+        if bgrep -qE '^[pcbs]' /tmp/vlist; then raise CAUTION; add "contains pipes or device files, which no ordinary archive needs"; fi
+        if bgrep -qE '(^|/)\.git(/|$)' /tmp/list; then
+          raise CAUTION; add "contains a git repository: never run git in the unpacked folder on the host"; fi
+        if bgrep -qiE '\.(py|js|ts|sh|ipynb|rb|php|go|rs)$|(^|/)(package\.json|setup\.py|pyproject\.toml|Makefile)$' /tmp/list; then
           raise CAUTION; add "contains code: after extracting, use the sandbox shell, never run on the host"; fi ;;
       markup) raise CAUTION; add "HTML/SVG can carry scripts: never open it in the browser" ;;
       code)   raise CAUTION; add "source code: read it, never run it on the host" ;;
@@ -136,43 +191,36 @@ case "$cmd" in
     esac
 
     echo
-    if [ -n "$findings" ]; then printf '%s' "$findings" | sed "s/^/$Y/;s/\$/$N/"; echo; fi
-    P="${Q_PATH:-<file>}"; DIR="${Q_DIR:-<folder>}"
-    case "$verdict" in
-      OK)      col=$G; msg="no known tricks found. Still, never open the original" ;;
-      CAUTION) col=$Y; msg="suspicious content. Never open the original" ;;
-      STOP)    col=$R; msg="dangerous file. Delete it and be wary of the sender" ;;
-    esac
-    printf '%sverdict:%s %s%s%s  %s\n' "$B" "$N" "$col" "$verdict" "$N" "$msg"
-    if [ "$verdict" = STOP ]; then nxt="rm -- $P"
-    else case "$cat_real" in
-      pdf|office|image|text|markup) nxt="tools/q-convert.sh $P" ;;
-      archive) nxt="tools/q-extract.sh $P" ;;
-      code)    nxt="tools/q-shell.sh $DIR" ;;
-      *)       nxt="ask the sender what this is; do not open it" ;;
-    esac; fi
-    printf '%snext:%s    %s%s%s\n' "$B" "$N" "$C" "$nxt" "$N" ;;
+    if [ -n "$findings" ]; then printf '%s' "$findings"; echo; fi
+    # The last line is for the host script, which accepts nothing but these fixed words.
+    echo "Q-RESULT $verdict $cat_real" ;;
   convert)
     case "$mime" in
-      application/pdf) render_pdf /tmp/input ;;
-      image/png|image/jpeg|image/gif|image/tiff|image/bmp) render_pdf /tmp/input ;;
-      image/svg+xml|application/json|text/*) head -c 5000000 /tmp/input > /out/content.txt ;;
+      application/pdf|image/png|image/jpeg|image/gif|image/tiff|image/bmp) render /tmp/input ;;
+      text/rtf|application/rtf|image/webp) office_to_pdf; render /tmp/lo/input.pdf ;;
+      image/svg+xml|application/json|text/*)
+        head -c "$MAX_TEXT" /tmp/input > /out/content.txt
+        if [ "$(wc -c < /tmp/input)" -gt "$MAX_TEXT" ]; then echo "note: only the first 5 MB of this text were copied"; fi ;;
       *)
         if is_office; then
-          mkdir -p /tmp/lo
-          soffice -env:UserInstallation=file:///tmp/lo-profile --headless --norestore \
-            --convert-to pdf --outdir /tmp/lo /tmp/input >/tmp/lo.log 2>&1 || { cat /tmp/lo.log; exit 1; }
-          render_pdf /tmp/lo/input.pdf
+          office_to_pdf; render /tmp/lo/input.pdf
         else
           echo "Do not know how to convert '$mime'. Use q-inspect.sh, q-extract.sh or q-shell.sh."; exit 2
         fi ;;
-    esac
-    echo "ok: $(find /out -type f | wc -l) file(s) written" ;;
+    esac ;;
   extract)
-    bsdtar -xf /tmp/input -C /out --no-same-owner --no-same-permissions 2>&1 | head -50
-    find /out -type l -delete                       # no symlinks pointing out of quarantine
-    find /out -type f -exec chmod 0644 {} +         # nothing is executable
-    find /out -type d -exec chmod 0755 {} +
-    echo "ok: $(find /out -type f | wc -l) file(s) extracted (symlinks removed, exec bits cleared)" ;;
+    if [ "${Q_BIG:-0}" != 1 ]; then
+      n=$(bsdtar -tf /tmp/input 2>/dev/null | head -n "$((MAX_ENTRIES + 1))" | wc -l)
+      if [ "$n" -gt "$MAX_ENTRIES" ] || [ "$(unpacked_bytes)" -gt "$MAX_BYTES" ]; then
+        echo "refused: this unpacks to more than 2 GB or more than $MAX_ENTRIES entries, the size of a decompression bomb."
+        echo "If you expected an archive that large, run q-extract.sh again with --big after the path."
+        exit 3
+      fi
+    fi
+    # The host script tidies the result (links, special files, permissions): this container is not trusted to.
+    rc=0
+    bsdtar -xf /tmp/input -C /out --no-same-owner --no-same-permissions >/tmp/xlog 2>&1 || rc=$?
+    head -n 50 /tmp/xlog | clean
+    exit "$rc" ;;
   *) echo "usage: q inspect|convert|extract [name]  < file"; exit 2 ;;
 esac

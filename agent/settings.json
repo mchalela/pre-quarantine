@@ -1,17 +1,28 @@
 {
+  "autoMemoryEnabled": false,
+  "claudeMdExcludes": [
+    "**/QUARANTINE/**",
+    "**/CLEAN/**"
+  ],
   "permissions": {
     "defaultMode": "default",
     "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable",
     "deny": [
       "Read(./QUARANTINE/**)",
       "Edit(./QUARANTINE/**)",
-      "Write(./QUARANTINE/**)",
       "Edit(./tools/**)",
       "Edit(./.claude/**)",
       "Edit(./CLAUDE.md)",
       "Edit(./agent/**)",
+      "Bash(./tools/q-shell.sh:*)",
+      "Bash(tools/q-shell.sh:*)",
+      "Bash(./tools/install-agent-rules.sh:*)",
+      "Bash(tools/install-agent-rules.sh:*)",
       "WebFetch",
-      "WebSearch"
+      "WebSearch",
+      "Agent",
+      "mcp__*"
     ],
     "allow": [
       "Bash(./tools/q-inspect.sh:*)",
