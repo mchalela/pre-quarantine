@@ -131,11 +131,15 @@ Then: "inspect and convert everything in QUARANTINE/sender and tell me what it i
 
 ## Development
 
+Develop in a separate clone, not in the folder you use for real files: an editor with extensions should never be open on a folder that holds untrusted files.
+
 ```bash
+git clone https://github.com/mchalela/pre-quarantine.git ~/Projects/pre-quarantine-dev && cd ~/Projects/pre-quarantine-dev
 pip install -r tests/requirements.txt
-tools/build.sh
 pytest
 ```
+
+The tests build their own image (`quarantine-tools-test`) from the checkout, so they never replace the image your working install uses.
 
 The tests run the real scripts against files generated on the spot (no hostile samples are stored in the repo), and check the container's isolation directly: no network, no capabilities, read-only system, no view of the home directory. CI runs the same tests plus ShellCheck on every push.
 

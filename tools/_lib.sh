@@ -3,7 +3,7 @@
 # shellcheck disable=SC2034  # the variables below are used by the scripts that source this file
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-Q="$ROOT/QUARANTINE"; CLEAN="$ROOT/CLEAN"; IMAGE=quarantine-tools
+Q="$ROOT/QUARANTINE"; CLEAN="$ROOT/CLEAN"; IMAGE="${Q_IMAGE:-quarantine-tools}"   # Q_IMAGE: used by the tests
 
 die() { echo "error: $*" >&2; exit 1; }
 

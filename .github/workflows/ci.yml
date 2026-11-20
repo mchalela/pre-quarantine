@@ -31,8 +31,6 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: pip install -r tests/requirements.txt
-      - name: Build the tools image
-        run: tools/build.sh
       - name: Pull the sandbox shell image
         run: docker pull python:3.12-slim
       - name: Run tests
