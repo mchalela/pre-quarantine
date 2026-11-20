@@ -7,6 +7,15 @@ Q="$ROOT/QUARANTINE"; CLEAN="$ROOT/CLEAN"; IMAGE="${Q_IMAGE:-quarantine-tools}" 
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# A working install runs the helper-agent rules as copies of agent/*. Say so when they fall behind
+# (for example after a git pull). Development clones have no marker and are left alone.
+if [ -e "$ROOT/.claude/.agent-rules-installed" ]; then
+  if ! cmp -s "$ROOT/agent/CLAUDE.md" "$ROOT/CLAUDE.md" ||
+     ! cmp -s "$ROOT/agent/settings.json" "$ROOT/.claude/settings.json"; then
+    echo "warning: the helper-agent rules here are missing or out of date. Run: tools/install-agent-rules.sh" >&2
+  fi
+fi
+
 # Resolve $1 and insist it lives under QUARANTINE/.
 in_quarantine() {
   local p; p="$(realpath -e -- "$1" 2>/dev/null)" || die "no such path: $1"

@@ -29,6 +29,7 @@ chmod 700 .                      # keep other users out
 tools/build.sh                   # builds the tools image (uses the network)
 docker pull python:3.12-slim     # image used by tools/q-shell.sh, so the first run works offline
 tools/demo-inspect.sh            # inert preview of what an inspection looks like
+tools/install-agent-rules.sh     # only if you will use a Claude Code helper in this folder
 ```
 
 **3. Your browser.** This is the first line of defence: a download must stay a download. The setting names differ per browser (look under Downloads, or Files and Applications), but the four goals are the same:
@@ -53,8 +54,7 @@ tools/demo-inspect.sh            # inert preview of what an inspection looks lik
 ```
 Pre-Quarantine/
 ├── README.md      this file
-├── CLAUDE.md      rules for a helper agent (loaded automatically by Claude Code)
-├── .claude/       hard permission blocks for the agent
+├── agent/         rules and hard permission blocks for a helper agent (templates)
 ├── tools/         scripts that handle files inside a locked-down container
 ├── QUARANTINE/    ⛔ untrusted originals. NEVER double-click anything in here
 └── CLEAN/         ✅ converted copies that are safe to open
@@ -109,9 +109,15 @@ For anything that needs a desktop app, a database or days of work: use a throwaw
 
 ## Working with Claude here
 
+The agent's rules ship as templates in `agent/`. They only take effect once you activate them in this folder, so do that before the first session, and again after every `git pull`:
+
 ```bash
-cd ~/Pre-Quarantine && claude
+cd ~/Pre-Quarantine
+tools/install-agent-rules.sh     # copies agent/CLAUDE.md and agent/settings.json into place
+claude
 ```
+
+Without that step an agent started here has no rules and no permission blocks. The other scripts print a warning when the active copies fall behind the templates.
 
 Then: "inspect and convert everything in QUARANTINE/sender and tell me what it is". The agent can run inspect, convert and extract without asking. It cannot read originals, cannot use the web, cannot edit the tools, and has to ask for everything else. Say no to anything that looks odd. Use the terminal, not VS Code; if you do open this in VS Code, open this folder (never a subfolder of `QUARANTINE/`), pick Restricted Mode, and don't click files in `QUARANTINE/`.
 
@@ -141,11 +147,14 @@ pytest
 
 The tests build their own image (`quarantine-tools-test`) from the checkout, so they never replace the image your working install uses.
 
+Do not run `tools/install-agent-rules.sh` in a development clone: the agent rules are meant to stop an agent from editing the tools, which is exactly what development needs. If you ran it by mistake, `tools/install-agent-rules.sh --remove` undoes it.
+
 The tests run the real scripts against files generated on the spot (no hostile samples are stored in the repo), and check the container's isolation directly: no network, no capabilities, read-only system, no view of the home directory. CI runs the same tests plus ShellCheck on every push.
 
 ## Upkeep
 
 - Rebuild the image once a month for security updates: `tools/build.sh` (the only step that uses the network).
+- To update: `git pull && tools/build.sh`, then `tools/install-agent-rules.sh` if you use a helper agent here.
 - Empty `QUARANTINE/` and `CLEAN/` when you are done with a sender's files.
 - This folder has a `.trackerignore` file so desktop search skips it. Don't browse `QUARANTINE/` in the file manager, or turn thumbnails off: Files → menu → Preferences → Performance → Show Thumbnails → Never.
 - If you think something did run on the host: disconnect, change passwords from another device (email first, then accounts that hold money), revoke GitHub and other tokens, rotate SSH keys.

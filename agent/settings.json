@@ -9,6 +9,7 @@
       "Edit(./tools/**)",
       "Edit(./.claude/**)",
       "Edit(./CLAUDE.md)",
+      "Edit(./agent/**)",
       "WebFetch",
       "WebSearch"
     ],
