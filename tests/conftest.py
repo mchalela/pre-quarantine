@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import os
 import shutil
 import subprocess
@@ -9,17 +7,19 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-IMAGE = "quarantine-tools"
+# The tests build and use their own image, so they always exercise the code in this checkout
+# and never replace the image a working install on the same machine is using.
+IMAGE = "quarantine-tools-test"
+os.environ["Q_IMAGE"] = IMAGE
 
 
 @pytest.fixture(scope="session", autouse=True)
 def image() -> str:
-    """The tools image must exist. Build it once if it does not."""
+    """Build the test image from this checkout (fast when nothing changed)."""
     if shutil.which("docker") is None:
         pytest.exit("docker is required to run these tests", returncode=2)
-    found = subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True)
-    if found.returncode != 0:
-        subprocess.run([str(REPO / "tools" / "build.sh")], check=True)
+    subprocess.run(["docker", "build", "-q", "-t", IMAGE, str(REPO / "tools" / "image")],
+                   check=True, stdout=subprocess.DEVNULL)
     return IMAGE
 
 

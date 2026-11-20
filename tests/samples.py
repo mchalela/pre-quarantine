@@ -1,6 +1,5 @@
 """Builders for test inputs. Everything is generated at test time and is inert:
 the "malicious" samples only carry the names and structure the tools look for."""
-from __future__ import annotations
 
 import io
 import tarfile

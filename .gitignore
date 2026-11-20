@@ -4,6 +4,9 @@ QUARANTINE/*
 CLEAN/*
 !CLEAN/.gitkeep
 
-.claude/settings.local.json
+# Active helper-agent rules. They are copies of agent/*, created by tools/install-agent-rules.sh
+# in a working install only, so a development clone is never bound by them.
+/CLAUDE.md
+/.claude/
 __pycache__/
 .pytest_cache/
