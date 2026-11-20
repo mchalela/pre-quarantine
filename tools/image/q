@@ -103,8 +103,9 @@ case "$cmd" in
           n=$a; [ "$b" -gt "$n" ] && n=$b
           if [ "$n" -gt 0 ]; then raise CAUTION; add "PDF marker $k ($n)"; fi
         done
-        n=$(grep -ac '/URI' /tmp/input || true); [ "$n" -gt 0 ] && row "links:" "$n (do not follow them)" || true
-        grep -aq '/Encrypt' /tmp/input && { raise CAUTION; add "PDF is encrypted"; } || true ;;
+        n=$(grep -ac '/URI' /tmp/input || true)
+        if [ "$n" -gt 0 ]; then row "links:" "$n (do not follow them)"; fi
+        if grep -aq '/Encrypt' /tmp/input; then raise CAUTION; add "PDF is encrypted"; fi ;;
       office)
         act=$(bsdtar -tf /tmp/input 2>/dev/null | grep -iE 'vbaProject|macros/|oleObject|activeX|\.bin$' | head -5 || true)
         if [ -n "$act" ]; then raise CAUTION; add "active content inside: $(printf '%s' "$act" | tr '\n' ' ' | clean)"; fi
@@ -123,7 +124,7 @@ case "$cmd" in
         bytes=$(bsdtar -tvf /tmp/input 2>/dev/null | awk '{s+=$5} END{printf "%.0f", s+0}')
         if [ "${bytes:-0}" -gt 2147483648 ]; then raise CAUTION; add "expands to $((bytes/1048576)) MB: possible decompression bomb"; fi
         bsdtar -tvf /tmp/input 2>/dev/null | head -40 | clean | sed "s/^/  $D/;s/\$/$N/"
-        [ "$total" -gt 40 ] && echo "  $D... $((total-40)) more$N" || true
+        if [ "$total" -gt 40 ]; then echo "  $D... $((total-40)) more$N"; fi
         bad=$(grep -iE '\.(exe|scr|bat|cmd|com|msi|dll|lnk|desktop|appimage|deb|rpm|vbs|jse|wsf|hta|ps1|jar|apk|dmg|iso)$' /tmp/list | head -5 || true)
         if [ -n "$bad" ]; then raise STOP; add "contains executables or launchers: $(printf '%s' "$bad" | tr '\n' ' ' | clean)"; fi
         if grep -qE '(^|/)\.\./|^/' /tmp/list; then raise STOP; add "paths that try to write outside the folder"; fi
