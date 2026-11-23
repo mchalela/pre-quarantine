@@ -4,16 +4,19 @@ The server is tested the way it runs: as a copy sitting next to the tools of an 
 temporary box, so it serves the box's QUARANTINE/ and CLEAN/ and never the real ones.
 """
 import importlib.util
+import os
 import random
 import re
 import shutil
+import subprocess
+import sys
 
 import anyio
 import pytest
-from mcp import Client
+from mcp import Client, StdioServerParameters
 
 import samples
-from conftest import REPO
+from conftest import IMAGE, REPO
 
 
 @pytest.fixture
@@ -518,3 +521,49 @@ def test_a_huge_text_never_arrives_in_one_call(server, box):
     r = ok(call(server, "read_converted", output="CLEAN/sender/big.pdf"))
     assert r["total_bytes"] == 1 << 30 and r["next_start"] == server.MAX_TEXT
     assert r["untrusted"]["text"] == "start of the text" and r["invisible_removed"] == server.MAX_TEXT - 17
+
+
+# --- as a client starts it: a process of its own, talking over stdin and stdout ---------------
+
+def test_the_whole_routine_over_stdio(server, box):
+    """Everything else here calls the server in-process. This starts it the way an MCP client
+    does. The scripts print a good deal; none of it may land on the stdout the protocol uses."""
+    box.put("brief.pdf", samples.pdf("Invoice 4471 is due on Friday"))
+    # A client hands the server a bare environment, so what the scripts need is passed by name.
+    env = {"Q_IMAGE": IMAGE, **{k: os.environ[k] for k in ("DOCKER_HOST", "XDG_RUNTIME_DIR") if k in os.environ}}
+    started = StdioServerParameters(command=sys.executable, args=[str(box.root / "mcp-server" / "server.py")], env=env)
+
+    async def routine():
+        async with Client(started) as client:
+            tools = {tool.name for tool in (await client.list_tools()).tools}
+            path = (await client.call_tool("list_files", {})).structured_content["untrusted"]["files"][0]["path"]
+            report = await client.call_tool("inspect", {"path": path})
+            copy = await client.call_tool("convert", {"path": path})
+            text = await client.call_tool("read_converted", {"output": copy.structured_content["output"]})
+            again = await client.call_tool("convert", {"path": path})
+            return client.server_info.name, client.instructions, tools, report, text, again
+    name, instructions, tools, report, text, again = anyio.run(routine)
+
+    assert name == "pre-quarantine"
+    assert tools == {"list_files", "inspect", "convert", "extract", "read_converted"}
+    assert "untrusted" in instructions and "STOP" in instructions
+    assert report.structured_content["verdict"] == "OK"
+    assert "Invoice 4471 is due on Friday" in text.structured_content["untrusted"]["text"]
+    assert again.is_error and "already there" in again.content[0].text
+
+
+def test_the_instructions_and_descriptions_fit_what_a_client_shows_the_model(server):
+    """Claude Code cuts server instructions and tool descriptions at 4,096 characters."""
+    async def described():
+        async with Client(server.mcp) as client:
+            return [client.instructions] + [tool.description for tool in (await client.list_tools()).tools]
+    for text in anyio.run(described):
+        assert 50 < len(text) < 4096
+
+
+def test_started_anywhere_but_in_an_install_it_stops_with_a_reason(tmp_path):
+    (tmp_path / "somewhere" / "mcp-server").mkdir(parents=True)
+    lone = shutil.copy(REPO / "mcp-server" / "server.py", tmp_path / "somewhere" / "mcp-server")
+    result = subprocess.run([sys.executable, lone], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+    assert result.returncode == 1
+    assert "not a Pre-Quarantine install" in result.stderr and result.stdout == ""
