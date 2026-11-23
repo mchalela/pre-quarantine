@@ -83,6 +83,15 @@ def test_readme_command_for_emptying_both_folders_spares_only_the_two_placeholde
     assert left == ["CLEAN", "CLEAN/.gitkeep", "QUARANTINE", "QUARANTINE/.gitkeep"]
 
 
+def test_links_between_the_readme_and_the_docs_point_at_files_that_exist():
+    pages = [REPO / "README.md", *sorted((REPO / "docs").glob("*.md"))]
+    assert len(pages) > 1
+    for page in pages:
+        for target in re.findall(r"\]\(([^)#]+)(?:#[^)]*)?\)", page.read_text()):
+            if "://" not in target:
+                assert (page.parent / target).exists(), f"{page.relative_to(REPO)} links to {target}"
+
+
 def test_demo_runs_and_uses_the_real_verdict_wording():
     demo = subprocess.run([str(REPO / "tools" / "demo-inspect.sh")], capture_output=True, text=True,
                           stdin=subprocess.DEVNULL)
