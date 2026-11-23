@@ -41,9 +41,9 @@ Then, from any project: "check `QUARANTINE/sender/brief.pdf` in my Pre-Quarantin
 
 | Tool | What it does |
 |---|---|
-| `list_files` | Names and sizes of the files in `QUARANTINE/`. Never contents. |
+| `list_files` | Names and sizes of the files in `QUARANTINE/`, 200 at a time. Never contents. |
 | `inspect` | Runs `tools/q-inspect.sh`. Returns the verdict (OK, CAUTION, STOP), the next step, and the report. |
-| `convert` | Runs `tools/q-convert.sh`. Returns the folder in `CLEAN/`, the number of pages, and whether there is text. |
+| `convert` | Runs `tools/q-convert.sh`. Returns the folder in `CLEAN/`, the number of pages, and whether there is text. Refuses when a copy of that name is already there. |
 | `extract` | Runs `tools/q-extract.sh`. Returns the folder with the unpacked files, each still to be inspected. |
 | `read_converted` | The text of a converted copy, 16,000 bytes at a time. |
 
@@ -53,8 +53,8 @@ There is no tool for the sandbox shell, none that deletes, and no option on any 
 
 - **Every tool that touches an original runs the script.** The check that a path is inside `QUARANTINE/` stays in the scripts; the server passes the path on and reports the refusal.
 - **Convert and extract inspect first.** They refuse on STOP, or when the inspection fails. An agent is told to inspect first; here it cannot skip it. By hand you still can.
-- **The sender's words are kept apart.** In every result, what comes from the file sits under one field named `untrusted`: names, the type description, archive listings, findings, converted text. The verdict and the next step are outside it, read only from the lines the script writes itself.
-- **What a file can push at the agent is bounded.** Reports are cut at 200 lines and text comes in pieces. Characters that cannot be seen (zero-width spaces, direction marks, Unicode tags) are left out of the text and counted: a person reading the copy would not notice them, a model would read them.
+- **The sender's words are kept apart.** In every result, what comes from the file or from the tools' own output sits under one field named `untrusted`: names, the type description, archive listings, findings, converted text. The verdict and the next step are outside it, read only from the lines the script writes itself. In an error, every line the tools printed is marked, because even a script's own message can quote a name the sender chose.
+- **What a file can push at the agent is bounded.** Reports are cut at 200 lines and 16,000 characters, listings and text come in pieces, and of what a script prints only the two ends are kept in memory. Characters that cannot be seen (zero-width spaces, direction marks, Unicode tags) are left out of the text and counted: a person reading the copy would not notice them, a model would read them.
 - **It talks over stdin and stdout only.** It opens no port, so nothing on the network can reach it.
 
 ## Fence the agent in
@@ -100,6 +100,8 @@ What a result does not show. The set is small and was written alongside the serv
 
 - **An agent can still be talked into things.** Converted text enters its context, and so do names and listings in a report. Labelling them as the sender's words helps and does not solve it. Read what the agent proposes before you approve it.
 - **Page pictures are not sent through the server.** An agent that can open files can view the PNGs in `CLEAN/`. One that cannot will not see a scan, and says so.
+- **A call cannot be cancelled half-way.** If the client gives up on a tool call, the script behind it still runs to its end, at most the 15 minutes every container gets.
+- **Two files with the same name from one sender share one folder in `CLEAN/`**, as with the scripts. The second conversion is refused until you delete the first copy, and the agent is told not to take the existing copy for the new file's.
 - **Leaving out invisible characters changes some texts**, for example in scripts that join letters with them. The copy in `CLEAN/` is left as it is.
 - **It puts Python packages on the host, outside the container.** The MCP SDK is pinned to one version, but the packages it depends on are not. Keep them in the virtual environment above.
 - **Everything in [Security model and limits](security.md) still applies.** The server is only as good as the scripts it runs.
