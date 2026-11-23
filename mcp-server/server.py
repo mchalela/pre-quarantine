@@ -277,8 +277,8 @@ NEXT_LINE = re.compile(r"next:    (.+)")
 
 class UntrustedReport(BaseModel):
     findings: list[str] = Field(description="What the checks flagged. May quote names from the file.")
-    details: list[str] = Field(description="The rest of the report: name, real type, size, hash, and "
-                                           "for an archive its listing.")
+    details: list[str] = Field(description="The rest of the report: name, real type, size, hash, and for "
+                                           "an archive its listing, every line of which is the sender's.")
 
 
 class Inspection(BaseModel):
@@ -294,6 +294,23 @@ class Inspection(BaseModel):
 def unreadable(why: str) -> ToolError:
     return ToolError(f"the inspection gave no verdict this server can rely on ({why}). "
                      "Treat the file as dangerous: do not open it, and tell the user.")
+
+
+def findings_and_details(report: list[str]) -> tuple[list[str], list[str]]:
+    """What the checks flagged, and the rest of the report.
+
+    tools/image/q closes its report with an empty line, its findings (each "  - ...") and another
+    empty line. Only that block counts. A line of the same shape further up is not a finding: the
+    listing of an archive is the sender's, and a line break in an owner's name is enough to make
+    part of it look like one.
+    """
+    body = report[:-1] if report and report[-1] == "" else report
+    first = len(body)
+    while first > 0 and body[first - 1].startswith("  - "):
+        first -= 1
+    if first == 0 or body[first - 1] != "":
+        first = len(body)
+    return [line[4:] for line in body[first:]], [line for line in body[:first] if line.strip()]
 
 
 def parse_inspection(printed: str, said: list[str]) -> Inspection:
@@ -318,8 +335,7 @@ def parse_inspection(printed: str, said: list[str]) -> Inspection:
         raise unreadable("the next step is not one this server knows; it is out of step with the scripts")
     if (verdict[1] == "STOP") != (name == "delete"):
         raise unreadable("the verdict and the next step disagree")
-    findings = [line[4:] for line in report if line.startswith("  - ")]
-    details = [line for line in report if line.strip() and not line.startswith("  - ")]
+    findings, details = findings_and_details(report)
     return Inspection(verdict=verdict[1], meaning=verdict[2], next_step=name, what_to_do=WHAT_TO_DO[name],
                       warnings=said, untrusted=UntrustedReport(findings=capped(findings), details=capped(details)))
 
@@ -348,7 +364,7 @@ def inspect(path: Original) -> Inspection:
 # Both write to disk, so both begin with an inspection of their own and stop on STOP. An agent is
 # told to inspect first; this makes sure of it. The user can still run the scripts by hand.
 
-SAFE = r"[A-Za-z0-9._-]+"       # all that safe_name in tools/_lib.sh leaves of a name
+SAFE = r"[A-Za-z0-9_][A-Za-z0-9._-]*"       # what safe_name in tools/_lib.sh makes of any name
 
 
 def allowed(path: str) -> Inspection:
@@ -382,21 +398,21 @@ class Conversion(BaseModel):
 
 
 def converted_folder(printed: str) -> tuple[Path, list[str]]:
-    """Where tools/q-convert.sh says it wrote, and what the container printed before that.
+    """Where tools/q-convert.sh wrote, and what was printed before it said so.
 
-    The script ends with two lines of its own, "ok: ..." and "result: <folder>". The folder is one
-    or two plain names below CLEAN/. Anything else is not believed.
+    Only for a run that ended well: then, and only then, the last line is the script's own
+    "result: <folder>". The folder is one or two plain names below CLEAN/. Anything else is not
+    believed. The line before it, "ok: ...", is not relied on: a converter that ends its output
+    without a line break gets the script's next line joined to its own.
     """
     lines = printed.splitlines()
-    if len(lines) < 2 or not re.fullmatch(r"ok: \d+ file\(s\) written", lines[-2]):
-        raise unexpected("q-convert.sh")
     start = f"result: {CLEAN}/"
-    if not lines[-1].startswith(start) or not re.fullmatch(f"{SAFE}(/{SAFE})?", lines[-1][len(start):]):
+    if not lines or not lines[-1].startswith(start) or not re.fullmatch(f"{SAFE}(/{SAFE})?", lines[-1][len(start):]):
         raise unexpected("q-convert.sh")
     folder = inside(CLEAN, lines[-1][len("result: "):])
     if not folder.is_dir():
         raise unexpected("q-convert.sh")
-    return folder, lines[:-2]
+    return folder, [line for line in lines[:-1] if line.strip()]
 
 
 def text_file(folder: Path) -> Path | None:
@@ -458,32 +474,44 @@ class Extraction(BaseModel):
     untrusted: UntrustedUnpacked
 
 
-GIT_NOTE = "note: there is a git repository inside."
-RESULT_LINE = re.compile(rf"result: .*/({SAFE}\.extracted)'?   \(still quarantined: .*\)")
+# Lines tools/q-extract.sh writes itself, word for word.
+GIT_NOTE = ("note: there is a git repository inside. Never run git in that folder on the host: "
+            "its config can run commands.")
+UNCLEAN = "the archive did not unpack cleanly"
+RESULT_LINE = re.compile(rf"result: .*/({SAFE}\.extracted)'?   \(still quarantined: treat each file by its own type\)")
 
 
-def extracted_folder(printed: str, path: str) -> tuple[Path, bool, list[str]]:
-    """Where tools/q-extract.sh unpacked to, whether it saw a git repository, and the container's lines.
+def unpacked_beside(folder: Path) -> set[str]:
+    try:
+        return {name for name in os.listdir(folder) if name.endswith(".extracted")}
+    except OSError:
+        return set()
 
-    The script ends with lines of its own: a count, perhaps the note about git, and
-    "result: <folder> (still quarantined: ...)". The folder is printed quoted for a shell, so only
-    its last part is taken from that line. It is a plain name, and it sits beside the archive.
+
+def extracted_folder(done: subprocess.CompletedProcess[str], beside: Path, before: set[str]) -> tuple[Path, bool, list[str]]:
+    """Where tools/q-extract.sh unpacked to, whether it saw a git repository, and what else was printed.
+
+    The script closes with lines of its own, the last being "result: <folder> (still quarantined:
+    ...)". They are only there if it got that far: when it ended well, or when it says in its own
+    words that the archive did not unpack cleanly. A script that stopped earlier printed nothing
+    of its own, so the last lines are the container's then, and a hostile archive can make them
+    read like a result. That case is a failure, whatever the lines say.
+
+    The folder is printed quoted for a shell, so only its last part is read: a plain name, in the
+    folder of the archive. And it has to be new. A folder that was there before this run is some
+    other archive's.
     """
-    lines = printed.splitlines()
+    if done.returncode != 0 and not any(UNCLEAN in line for line in done.stderr.splitlines()):
+        raise failure(done)
+    lines = done.stdout.splitlines()
     result = RESULT_LINE.fullmatch(lines[-1]) if lines else None
-    if not result:
+    if not result or result[1] in before:
         raise unexpected("q-extract.sh")
-    own = 2
-    git = len(lines) > 2 and lines[-2].startswith(GIT_NOTE)
-    if git:
-        own = 3
-    if len(lines) < own or not re.fullmatch(r"\d+ file\(s\) extracted \(.*\)", lines[-own]):
-        raise unexpected("q-extract.sh")
-    archive = inside(Q, target(path))
-    folder = inside(Q, str(archive.parent / result[1]))
+    folder = inside(Q, str(beside / result[1]))
     if not folder.is_dir():
         raise unexpected("q-extract.sh")
-    return folder, git, lines[:-own]
+    git = len(lines) > 1 and lines[-2] == GIT_NOTE
+    return folder, git, [line for line in lines[:-2 if git else -1] if line.strip()]
 
 
 @mcp.tool(annotations=WRITES)
@@ -496,13 +524,10 @@ def extract(path: Original) -> Extraction:
     entries, the size of a decompression bomb. Nothing here lifts that limit: tell the user.
     """
     report = allowed(path)
+    beside = inside(Q, target(path)).parent
+    before = unpacked_beside(beside)
     done = run("q-extract.sh", path)
-    try:
-        folder, git, notes = extracted_folder(done.stdout, path)
-    except ToolError:
-        if done.returncode != 0:
-            raise failure(done) from None
-        raise
+    folder, git, notes = extracted_folder(done, beside, before)
     listing = files_under(folder)
     return Extraction(
         verdict=report.verdict, complete=done.returncode == 0, output=listing.folder,
