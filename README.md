@@ -95,6 +95,7 @@ The full list is in [Security model and limits](docs/security.md).
 - The container is treated as possibly taken over: what it prints is filtered and what it writes is checked on the host.
 - Over 120 tests run the real scripts against files generated on the spot, check the container's isolation directly, and include a stand-in for a taken-over container. CI runs them with ShellCheck on every push.
 - A Claude Code agent can do the routine for you, fenced in by permission rules that ship as templates.
+- Optional: an MCP server offers inspect, convert and extract to an agent working in another project. It needs Python on the host.
 
 ## Upkeep
 
@@ -108,5 +109,6 @@ The full list is in [Security model and limits](docs/security.md).
 - [Setup in full](docs/setup.md): Docker, browser, desktop and git settings.
 - [Untrusted repos, step by step](docs/untrusted-repos.md): cloning code and running it in the sandbox shell.
 - [Working with a Claude Code helper](docs/agent.md): activating the agent rules, and what they block.
+- [The MCP server](docs/mcp.md): the tools for an agent in another project, and how to fence it in.
 - [Security model and limits](docs/security.md): what is and is not protected, in detail.
 - [Development](docs/development.md): the tests, and how to work on the tools.

@@ -15,3 +15,5 @@ Without that step an agent started here has no rules and no permission blocks. T
 Then: "inspect and convert everything in QUARANTINE/sender and tell me what it is". The agent can run inspect, convert and extract without asking. It cannot read originals, use the web, start subagents or use MCP tools, cannot edit the tools, keeps no memory between sessions, and has to ask for everything else. Say no to anything that looks odd. Use the terminal, not VS Code; if you do open this in VS Code, open this folder (never a subfolder of `QUARANTINE/`), pick Restricted Mode, and don't click files in `QUARANTINE/`.
 
 Your own settings still count in this folder. A broad allow rule in `~/.claude/settings.json` (for example one that allows every shell command) also applies here and would let the agent run things without asking; the blocks above still win over it. Check that file before the first session.
+
+To have an agent in another project check a file here, without starting it in this folder, see [the MCP server](mcp.md). Such an agent is not bound by the rules above.

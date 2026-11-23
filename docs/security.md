@@ -11,6 +11,7 @@
 - **Does not check the pixels.** A converter that was taken over could still write a PNG built to attack an image viewer. That takes a second, separate exploit; Dangerzone (see Limits) closes this gap, this repo does not.
 - **The sandbox shell is looser on purpose:** the folder is writable, with `--net` the code reaches this machine's services and your local network as well as the internet, and it can see where the folder sits on your disk (the path includes your user name).
 - `text.txt` in `CLEAN/` is safe to open but is still the stranger's words.
+- **An agent that reaches the tools through the [MCP server](mcp.md) is fenced in less than one started in this folder.** The server refuses what it should, but the agent keeps its own file and shell tools unless you block them yourself.
 
 ## Limits
 

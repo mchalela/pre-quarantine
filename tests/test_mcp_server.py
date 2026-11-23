@@ -4,6 +4,7 @@ The server is tested the way it runs: as a copy sitting next to the tools of an 
 temporary box, so it serves the box's QUARANTINE/ and CLEAN/ and never the real ones.
 """
 import importlib.util
+import json
 import os
 import random
 import re
@@ -567,3 +568,27 @@ def test_started_anywhere_but_in_an_install_it_stops_with_a_reason(tmp_path):
     result = subprocess.run([sys.executable, lone], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
     assert result.returncode == 1
     assert "not a Pre-Quarantine install" in result.stderr and result.stdout == ""
+
+
+# --- the page that documents it -------------------------------------------------------------
+
+def test_the_docs_list_exactly_the_tools_the_server_has(server):
+    page = (REPO / "docs" / "mcp.md").read_text()
+    listed = set(re.findall(r"^\| `(\w+)` \|", page, re.M))
+
+    async def names():
+        async with Client(server.mcp) as client:
+            return {tool.name for tool in (await client.list_tools()).tools}
+    assert listed == anyio.run(names)
+    assert f"{server.MAX_TEXT:,} bytes" in page and f"{server.MAX_LINES} lines" in page
+
+
+def test_the_settings_in_the_docs_are_valid_and_block_the_direct_routes():
+    """They are pasted as they stand, so they have to parse as they stand."""
+    page = (REPO / "docs" / "mcp.md").read_text()
+    client, user = [json.loads(block) for block in re.findall(r"```json\n(.*?)```", page, re.S)]
+    started = client["mcpServers"]["pre-quarantine"]
+    assert started["command"].endswith("/mcp-server/.venv/bin/python") and started["args"][0].endswith("/mcp-server/server.py")
+    deny = user["permissions"]["deny"]
+    assert "Read(~/Pre-Quarantine/QUARANTINE/**)" in deny and "Edit(~/Pre-Quarantine/**)" in deny
+    assert "allow" not in user["permissions"]

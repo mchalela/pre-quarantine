@@ -28,9 +28,10 @@ tools/install-agent-rules.sh     # only if you will use a Claude Code helper in 
 ```
 Pre-Quarantine/
 ├── README.md      the routine and what to do with each kind of file
-├── docs/          this page, untrusted repos, the helper agent, security model, development
+├── docs/          this page, untrusted repos, the helper agent, the MCP server, security model, development
 ├── agent/         rules and hard permission blocks for a helper agent (templates)
 ├── tools/         scripts that handle files inside a locked-down container
+├── mcp-server/    optional: the same tools for an agent in another project
 ├── QUARANTINE/    ⛔ untrusted originals. NEVER double-click anything in here
 └── CLEAN/         ✅ converted copies that are safe to open
 ```
