@@ -41,3 +41,12 @@ def test_missing_file_is_an_error_not_a_crash(box):
     result = box.run("q-inspect.sh", "QUARANTINE/nope.pdf")
     assert result.returncode != 0
     assert "no such path" in result.stderr
+
+
+@pytest.mark.parametrize("script", SCRIPTS)
+def test_refuses_an_image_that_was_not_built_from_these_scripts(box, script):
+    """After a git pull the old image is still there. Its output would be misread, so it is not used."""
+    result = box.run(script, box.put("brief.pdf", samples.pdf()), env={"Q_IMAGE": "python:3.12-slim"})
+    assert result.returncode != 0
+    assert "tools/build.sh" in result.stderr
+    assert list(box.clean.iterdir()) == []

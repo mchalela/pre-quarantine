@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Inert preview of what tools/q-inspect.sh prints in each case.
 # Touches no files and runs no container: every value below is made up.
-# Same colours and layout as tools/image/q, so edit here to try a design, then port it.
+# Same colours and layout as tools/q-inspect.sh, so edit here to try a design, then port it.
 #   tools/demo-inspect.sh            all cases
 #   tools/demo-inspect.sh stop       only cases whose title matches "stop"
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] || [ -n "${FORCE_COLOR:-}" ]; then
@@ -72,7 +72,7 @@ verdict CAUTION "tools/q-convert.sh QUARANTINE/sender/budget.xlsm"
 title "CAUTION · Office file loading a remote template"
 head5 "report.docx" "Microsoft Word 2007+" "application/vnd.openxmlformats-officedocument.wordprocessingml.document" 15322 $H
 blank
-finding "loads a remote template or object"; blank
+finding "loads content from outside the file: a remote template, object or linked data"; blank
 verdict CAUTION "tools/q-convert.sh QUARANTINE/sender/report.docx"
 
 title "CAUTION · archive containing code"
