@@ -307,15 +307,62 @@ def test_names_that_cannot_be_shown_exactly_are_counted_not_listed(server, box):
     (box.quarantine / "sender" / b"bad\xffbytes.pdf".decode("utf-8", "surrogateescape")).write_bytes(b"x")
     r = ok(call(server, "list_files"))
     assert [entry["path"] for entry in r["untrusted"]["files"]] == ["QUARANTINE/sender/plain name (1) café.pdf"]
-    assert (r["total"], r["odd_names"], r["not_shown"]) == (6, 5, 0)
+    assert (r["total"], r["odd_names"], r["next_start"]) == (6, 5, None)
 
 
-def test_a_long_listing_is_cut_and_says_so(server, box):
-    for n in range(server.MAX_FILES + 5):
+def test_a_long_listing_comes_in_parts_that_add_up_to_the_whole(server, box):
+    for n in range(2 * server.MAX_FILES + 5):
         box.put(f"f{n:04}.txt", b"x")
+    seen, start, parts = [], 0, 0
+    while start is not None:
+        r = ok(call(server, "list_files", folder="sender", start=start))
+        assert len(r["untrusted"]["files"]) <= server.MAX_FILES and r["total"] == 2 * server.MAX_FILES + 5
+        seen += [entry["path"] for entry in r["untrusted"]["files"]]
+        start, parts = r["next_start"], parts + 1
+    assert parts == 3 and seen == [f"QUARANTINE/sender/f{n:04}.txt" for n in range(2 * server.MAX_FILES + 5)]
+    assert ok(call(server, "list_files", start=10_000))["untrusted"]["files"] == []
+
+
+def test_long_paths_do_not_make_a_long_listing(server, box):
+    """An ordinary archive can hold paths of four thousand characters, two hundred of them."""
+    deep = box.quarantine.joinpath("sender", *["d" * 250] * 3)
+    deeper = box.quarantine.joinpath("sender", *["e" * 250] * 4)
+    deep.mkdir(parents=True)
+    deeper.mkdir(parents=True)
+    for n in range(60):
+        (deep / f"f{n:02}.txt").write_bytes(b"x")
+    (deeper / "too-long.txt").write_bytes(b"x")
     r = ok(call(server, "list_files"))
-    assert len(r["untrusted"]["files"]) == server.MAX_FILES
-    assert (r["total"], r["not_shown"]) == (server.MAX_FILES + 5, 5)
+    shown = [entry["path"] for entry in r["untrusted"]["files"]]
+    assert sum(map(len, shown)) <= server.MAX_CHARS and 0 < len(shown) < 60
+    assert (r["total"], r["odd_names"], r["next_start"]) == (61, 1, len(shown))
+    assert not any("too-long" in path for path in shown)
+
+
+def test_only_a_folder_can_be_listed_and_never_a_scratch_folder(server, box):
+    box.put("brief.pdf", samples.pdf())
+    (box.quarantine / ".q-abc123" / "sub").mkdir(parents=True)
+    assert "not a folder" in refused(call(server, "list_files", folder="sender/brief.pdf"))
+    for folder in (".q-abc123", "QUARANTINE/.q-abc123/sub"):
+        assert "no such path" in refused(call(server, "list_files", folder=folder))
+
+
+def test_a_folder_swapped_for_a_link_after_the_check_is_not_followed(server, box, tmp_path):
+    """Code in a sandbox shell can swap a folder for a link between the check and the listing."""
+    (tmp_path / "private").mkdir()
+    (tmp_path / "private" / "key.txt").write_text("secret")
+    (box.quarantine / "sender" / "repo").mkdir(parents=True)
+    checked = server.inside(server.Q, str(box.quarantine / "sender" / "repo"))
+    (box.quarantine / "sender" / "repo").rmdir()
+    (box.quarantine / "sender" / "repo").symlink_to(tmp_path / "private")
+    with pytest.raises(server.ToolError, match="not a folder that can be listed"):
+        server.files_under(checked)
+    (box.quarantine / "sender" / "moved").mkdir()
+    checked = server.inside(server.Q, str(box.quarantine / "sender" / "moved"))
+    (box.quarantine / "sender").rename(box.quarantine / "sender-real")
+    (box.quarantine / "sender").symlink_to(tmp_path)                 # a link higher up the path
+    with pytest.raises(server.ToolError, match="not a folder that can be listed"):
+        server.files_under(checked)
 
 
 # --- convert --------------------------------------------------------------------------------
@@ -425,7 +472,7 @@ def test_extract_lists_what_it_unpacked_as_paths_to_inspect(server, box):
     assert r["output"] == "QUARANTINE/sender/pack.tar.gz.extracted"
     assert [entry["path"] for entry in r["untrusted"]["files"]] == [
         "QUARANTINE/sender/pack.tar.gz.extracted/a.txt", "QUARANTINE/sender/pack.tar.gz.extracted/sub/b.pdf"]
-    assert (r["total"], r["not_shown"], r["odd_names"]) == (2, 0, 0)
+    assert (r["total"], r["next_start"], r["odd_names"]) == (2, None, 0)
     assert ok(call(server, "inspect", path=r["untrusted"]["files"][1]["path"]))["next_step"] == "convert"
     assert ok(call(server, "list_files", folder=r["output"]))["total"] == 2
 

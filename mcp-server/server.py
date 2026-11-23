@@ -113,7 +113,7 @@ def target(path: str) -> str:
     ("sender/file.pdf"), or an absolute one. Whether it really is inside QUARANTINE/ is for the
     script to check, not for this function.
     """
-    p = Path(os.path.expanduser(path))
+    p = Path(os.path.expanduser(path) if path.startswith("~/") else path)
     if p.is_absolute():
         return str(p)
     if p.parts[:1] == ("QUARANTINE",):
@@ -178,13 +178,13 @@ def inside(base: Path, path: str) -> Path:
 
 
 def showable(name: str) -> bool:
-    """True if a path can be shown and typed back exactly: text with nothing invisible in it."""
+    """True if a path can be shown and typed back exactly: text of a sane length with nothing invisible in it."""
     try:
         name.encode("utf-8")
     except UnicodeEncodeError:                  # bytes that are not text at all
         return False
-    return not any(unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp")
-                   for c in name)
+    return len(name) <= 1000 and not any(
+        unicodedata.category(c)[0] == "C" or unicodedata.category(c) in ("Zl", "Zp") for c in name)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -203,52 +203,86 @@ class UntrustedFiles(BaseModel):
 class Listing(BaseModel):
     folder: str
     total: int = Field(description="Regular files found, shown or not.")
-    not_shown: int = Field(description=f"Files beyond the first {MAX_FILES}. List a subfolder to see them.")
-    odd_names: int = Field(description="Files left out because their names hold characters that cannot "
-                                       "be shown or typed back safely. The user has to rename them.")
+    next_start: int | None = Field(description="Pass this as start, with the same folder, for the files "
+                                               "after these. Null when these were the last.")
+    odd_names: int = Field(description="Files left out because their names cannot be shown or typed back "
+                                       "safely: invisible characters, or too long. The user has to rename them.")
     untrusted: UntrustedFiles
 
 
-def files_under(top: Path) -> Listing:
+def opened(base: Path, folder: Path) -> int:
+    """A descriptor for folder, which is base or below it, reached one name at a time and never
+    through a link.
+
+    The path was checked a moment ago, but code in a sandbox shell can swap a folder for a link at
+    any time. Opened this way, a link is an error and not a way out of QUARANTINE/.
+    """
+    descriptor = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in folder.relative_to(base).parts:
+            deeper = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = deeper
+    except OSError:
+        os.close(descriptor)
+        raise ToolError(f"{folder.name} is not a folder that can be listed") from None
+    return descriptor
+
+
+def files_under(top: Path, start: int = 0) -> Listing:
     """Regular files under top, a real folder inside QUARANTINE. Links are never followed."""
-    root = Path(os.path.realpath(ROOT))
+    base = Path(os.path.realpath(Q))
+    below = top.relative_to(base)
+    scratch = re.compile(r"\.q-.{6}")           # where a script keeps the container's output until it is checked
+    if below.parts and scratch.fullmatch(below.parts[0]):
+        raise ToolError(f"no such path: {top.name}")
     found: list[tuple[str, int]] = []
     odd = 0
-    for folder, subfolders, names in os.walk(top, followlinks=False):
-        subfolders.sort()
-        if Path(folder) == Path(os.path.realpath(Q)):
-            # The scripts' scratch folders, and the placeholder that keeps the folder in git.
-            subfolders[:] = [d for d in subfolders if not re.fullmatch(r"\.q-.{6}", d)]
-            names = [n for n in names if n != ".gitkeep"]
-        for name in sorted(names):
-            entry = Path(folder) / name
-            try:
-                status = entry.lstat()
-            except OSError:
-                continue
-            if not stat.S_ISREG(status.st_mode):        # lstat: a link is not a regular file
-                continue
-            shown = str(entry.relative_to(root))
-            if showable(shown):
-                found.append((shown, status.st_size))
-            else:
-                odd += 1
-    return Listing(folder=str(top.relative_to(root)), total=len(found) + odd,
-                   not_shown=max(0, len(found) - MAX_FILES), odd_names=odd,
-                   untrusted=UntrustedFiles(files=[FileEntry(path=p, bytes=b) for p, b in found[:MAX_FILES]]))
+    descriptor = opened(base, top)
+    try:
+        for folder, subfolders, names, here in os.fwalk(".", dir_fd=descriptor, follow_symlinks=False):
+            subfolders.sort()
+            if below / folder == Path("."):         # QUARANTINE/ itself
+                subfolders[:] = [d for d in subfolders if not scratch.fullmatch(d)]
+                names = [n for n in names if n != ".gitkeep"]       # keeps the folder in git
+            for name in sorted(names):
+                try:
+                    status = os.stat(name, dir_fd=here, follow_symlinks=False)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(status.st_mode):        # a link is not a regular file
+                    continue
+                shown = str(Path("QUARANTINE") / below / folder / name)
+                if showable(shown):
+                    found.append((shown, status.st_size))
+                else:
+                    odd += 1
+    finally:
+        os.close(descriptor)
+    page, room = [], MAX_CHARS
+    for path, size in found[start:start + MAX_FILES]:
+        if len(path) > room:
+            break
+        page.append(FileEntry(path=path, bytes=size))
+        room -= len(path)
+    after = start + len(page)
+    return Listing(folder=str(Path("QUARANTINE") / below), total=len(found) + odd,
+                   next_start=after if after < len(found) else None, odd_names=odd,
+                   untrusted=UntrustedFiles(files=page))
 
 
 @mcp.tool(annotations=READS)
 def list_files(
     folder: Annotated[str, Field(description='A folder inside QUARANTINE, for example "QUARANTINE/sender". '
                                              "Empty for all of it.")] = "",
+    start: Annotated[int, Field(ge=0, description="How many files to skip. 0 for the first ones.")] = 0,
 ) -> Listing:
     """List the files waiting in QUARANTINE, or in one folder inside it.
 
     Use it to find a file the user mentions, or to see what extract unpacked. It reads names and
-    sizes only, never contents.
+    sizes only, never contents. A long listing comes in parts: call again with next_start.
     """
-    return files_under(inside(Q, target(folder)))
+    return files_under(inside(Q, target(folder)), start)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -348,7 +382,7 @@ def parse_inspection(printed: str, notes: list[str]) -> Inspection:
 def inspection(path: str) -> Inspection:
     done = run("q-inspect.sh", path)
     if done.returncode != 0:
-        raise failure(done, "There is no verdict, so treat the file as dangerous: do not open it, and tell the user.")
+        raise failure(done, "There is no verdict. Do not open the file, and tell the user.")
     return parse_inspection(done.stdout, said(done))
 
 
@@ -470,9 +504,10 @@ class Extraction(BaseModel):
     output: str = Field(description="The folder with the unpacked files. It is inside QUARANTINE: "
                                     "every file in it is as untrusted as the archive was.")
     total: int = Field(description="Regular files unpacked, shown or not.")
-    not_shown: int = Field(description=f"Files beyond the first {MAX_FILES}. Use list_files on a subfolder.")
-    odd_names: int = Field(description="Files left out because their names hold characters that cannot "
-                                       "be shown or typed back safely. The user has to rename them.")
+    next_start: int | None = Field(description="Not null when there are more files than shown here: call "
+                                               "list_files with this as start and output as folder.")
+    odd_names: int = Field(description="Files left out because their names cannot be shown or typed back "
+                                       "safely: invisible characters, or too long. The user has to rename them.")
     git_repository: bool = Field(description="True if a git repository was unpacked. Nobody may run git "
                                              "in that folder on the host: its config can run commands.")
     what_to_do: str
@@ -536,7 +571,7 @@ def extract(path: Original) -> Extraction:
     listing = files_under(folder)
     return Extraction(
         verdict=report.verdict, complete=done.returncode == 0, output=listing.folder,
-        total=listing.total, not_shown=listing.not_shown, odd_names=listing.odd_names, git_repository=git,
+        total=listing.total, next_start=listing.next_start, odd_names=listing.odd_names, git_repository=git,
         what_to_do=("" if done.returncode == 0 else "The archive did not unpack cleanly, so files may be "
                     "missing: tell the user. ") + "Inspect each unpacked file before doing anything else with it.",
         untrusted=UntrustedUnpacked(files=listing.untrusted.files, notes=capped(notes) + said(done)))
