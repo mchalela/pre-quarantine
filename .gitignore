@@ -10,3 +10,6 @@ CLEAN/*
 /.claude/
 __pycache__/
 .pytest_cache/
+
+# Virtual environment of the optional MCP server.
+.venv/

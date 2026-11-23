@@ -1,0 +1,2 @@
+# The official MCP SDK. Pinned: this code runs on the host, outside the container.
+mcp==2.3.0
