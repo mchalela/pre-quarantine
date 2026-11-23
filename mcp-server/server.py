@@ -20,6 +20,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 import unicodedata
 from pathlib import Path
 from typing import Annotated, Literal
@@ -35,9 +36,11 @@ Q = ROOT / "QUARANTINE"
 CLEAN = ROOT / "CLEAN"
 
 # A hostile file, or a container it has taken over, decides how much the scripts print.
-# These bound how much of that can land in the agent's context from one call.
-MAX_LINES = 200
-MAX_LINE = 400
+# These bound how much of that is held in memory, and how much lands in the agent's context.
+KEEP = 256 * 1024       # bytes kept from each end of what a script prints; the middle is dropped
+MAX_LINES = 200         # of a report or a log, per list
+MAX_LINE = 400          # characters of one line
+MAX_CHARS = 16_000      # characters of one list in all
 MAX_FILES = 200
 MAX_TEXT = 16_000       # bytes of converted text per call
 
@@ -71,11 +74,36 @@ Original = Annotated[str, Field(description='A file inside QUARANTINE, for examp
 
 
 def capped(lines: list[str]) -> list[str]:
-    """The first MAX_LINES lines, each cut at MAX_LINE characters."""
-    kept = [line[:MAX_LINE] for line in lines[:MAX_LINES]]
-    if len(lines) > MAX_LINES:
-        kept.append(f"... {len(lines) - MAX_LINES} more lines not shown")
-    return kept
+    """The first lines, each cut at MAX_LINE characters, up to MAX_LINES lines and MAX_CHARS in all."""
+    shown, room = [], MAX_CHARS
+    for line in lines[:MAX_LINES]:
+        line = line[:MAX_LINE]
+        if len(line) > room:
+            break
+        shown.append(line)
+        room -= len(line)
+    if len(shown) < len(lines):
+        shown.append(f"... {len(lines) - len(shown)} more lines not shown")
+    return shown
+
+
+def kept(stream) -> bytes:
+    """Read a pipe to its end, holding on to the first and the last KEEP bytes only.
+
+    A converter that was taken over can print without end. By hand that scrolls past. Here it
+    would all sit in memory. The lines a script writes itself are its last ones, so the end is
+    what has to survive.
+    """
+    head = stream.read(KEEP)
+    tail, dropped = b"", False
+    while chunk := stream.read(1 << 16):
+        tail += chunk
+        if len(tail) > KEEP:
+            tail, dropped = tail[-KEEP:], True
+    if not dropped:
+        return head + tail
+    # Whole lines only on each side of the gap, so that half a line is never joined to another.
+    return head[:head.rfind(b"\n") + 1] + b"[... output left out here ...]\n" + tail[tail.find(b"\n") + 1:]
 
 
 def target(path: str) -> str:
@@ -97,12 +125,19 @@ def run(script: str, path: str) -> subprocess.CompletedProcess[str]:
     """Run tools/<script> on one path. Its output is captured: none of it may reach our stdout."""
     env = {k: v for k, v in os.environ.items() if k != "FORCE_COLOR"}
     env["NO_COLOR"] = "1"
+    command = [str(TOOLS / script), target(path)]
+    said: list[bytes] = []
     try:
-        return subprocess.run([str(TOOLS / script), target(path)], cwd=ROOT, env=env,
-                              stdin=subprocess.DEVNULL, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace")
+        with subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            listener = threading.Thread(target=lambda: said.append(kept(process.stderr)))
+            listener.start()                    # both pipes are read at once, or a full one would block the script
+            printed = kept(process.stdout)
+            listener.join()
     except (OSError, ValueError) as error:      # ValueError: a zero byte in the path
         raise ToolError(f"could not run tools/{script}: {error}") from None
+    return subprocess.CompletedProcess(command, process.returncode, printed.decode("utf-8", "replace"),
+                                       b"".join(said).decode("utf-8", "replace"))
 
 
 def warnings(done: subprocess.CompletedProcess[str]) -> list[str]:

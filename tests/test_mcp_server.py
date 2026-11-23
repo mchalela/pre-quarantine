@@ -178,11 +178,35 @@ def test_a_report_as_expected_is_read_into_fields(server):
 
 
 def test_a_long_report_is_cut_before_it_reaches_the_agent(server):
-    lines = [f"  entry {n} " + "x" * 1000 for n in range(5000)]
-    r = server.parse_inspection("\n".join(lines) + "\nverdict: OK  fine\nnext:    tools/q-extract.sh QUARANTINE/a.zip\n", [])
+    short = [f"  entry {n}" for n in range(5000)]
+    r = server.parse_inspection("\n".join(short) + "\nverdict: OK  fine\nnext:    tools/q-extract.sh QUARANTINE/a.zip\n", [])
     assert len(r.untrusted.details) == server.MAX_LINES + 1
-    assert all(len(line) <= server.MAX_LINE for line in r.untrusted.details)
     assert r.untrusted.details[-1] == f"... {5000 - server.MAX_LINES} more lines not shown"
+    long = [f"  entry {n} " + "x" * 1000 for n in range(5000)]
+    r = server.parse_inspection("\n".join(long) + "\nverdict: OK  fine\nnext:    tools/q-extract.sh QUARANTINE/a.zip\n", [])
+    assert all(len(line) <= server.MAX_LINE for line in r.untrusted.details)
+    assert sum(len(line) for line in r.untrusted.details[:-1]) <= server.MAX_CHARS
+    assert r.untrusted.details[-1] == f"... {5000 - server.MAX_CHARS // server.MAX_LINE} more lines not shown"
+
+
+def test_what_a_script_prints_is_never_held_whole(server, box):
+    """A converter that was taken over can print for a quarter of an hour. Only the two ends are kept."""
+    flood = box.root / "tools" / "flood.sh"
+    flood.write_text("#!/usr/bin/env bash\necho first line\nhead -c 30000000 /dev/zero | tr '\\0' 'x' | fold -w 100; echo\n"
+                     "head -c 2000000 /dev/zero | tr '\\0' 'e' | fold -w 100 >&2\necho 'result: the last line'\n")
+    flood.chmod(0o755)
+    done = server.run("flood.sh", "anything")
+    assert done.returncode == 0
+    lines = done.stdout.splitlines()
+    assert lines[0] == "first line" and lines[-1] == "result: the last line"
+    assert "[... output left out here ...]" in lines and set(map(len, lines)) <= {10, 30, 21, 100}     # whole lines only
+    assert done.stderr.count("\n") < 2 * server.KEEP / 100 + 3
+    assert len(done.stdout) <= 2 * server.KEEP + 100 and len(done.stderr) <= 2 * server.KEEP + 100
+    quiet = box.root / "tools" / "quiet.sh"
+    quiet.write_text("#!/usr/bin/env bash\nprintf 'a\\nb'; echo warning >&2; exit 3\n")
+    quiet.chmod(0o755)
+    done = server.run("quiet.sh", "anything")
+    assert (done.returncode, done.stdout, done.stderr) == (3, "a\nb", "warning\n")
 
 
 def test_a_stale_rules_warning_reaches_the_user_and_the_verdict_still_stands(server, box):
