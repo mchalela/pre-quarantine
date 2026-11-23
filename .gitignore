@@ -13,3 +13,6 @@ __pycache__/
 
 # Virtual environment of the optional MCP server.
 .venv/
+
+# What a run of the evals writes: transcripts and scores.
+evals/results/
