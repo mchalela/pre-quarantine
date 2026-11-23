@@ -59,10 +59,10 @@ def test_offers_no_tool_for_the_shell_the_network_or_deleting(server):
         async with Client(server.mcp) as client:
             return {tool.name: tool for tool in (await client.list_tools()).tools}
     tools = anyio.run(names)
-    assert set(tools) == {"list_files", "inspect"}
+    assert set(tools) == {"list_files", "inspect", "convert", "extract"}
     for tool in tools.values():
         options = set(tool.input_schema.get("properties", {}))
-        assert options <= {"path", "folder"}, f"{tool.name} takes {options}"
+        assert options <= {"path", "folder"}, f"{tool.name} takes {options}"       # so nothing like --big or --net
 
 
 # --- inspect --------------------------------------------------------------------------------
@@ -245,3 +245,185 @@ def test_a_long_listing_is_cut_and_says_so(server, box):
     r = ok(call(server, "list_files"))
     assert len(r["untrusted"]["files"]) == server.MAX_FILES
     assert (r["total"], r["not_shown"]) == (server.MAX_FILES + 5, 5)
+
+
+# --- convert --------------------------------------------------------------------------------
+
+def test_convert_says_where_the_copy_is_and_what_is_in_it(server, box):
+    box.put("brief.pdf", samples.pdf("Invoice 4471"))
+    r = ok(call(server, "convert", path="QUARANTINE/sender/brief.pdf"))
+    assert (r["verdict"], r["output"], r["pages"], r["has_text"]) == ("OK", "CLEAN/sender/brief.pdf", 1, True)
+    folder = box.clean / "sender" / "brief.pdf"
+    assert r["folder"] == str(folder.resolve())
+    assert sorted(p.name for p in folder.iterdir()) == ["page-001.png", "text.txt"]
+    assert "read_converted" in r["what_to_do"] and r["untrusted"]["notes"] == []
+
+
+def test_convert_says_when_there_is_no_text_to_read(server, box):
+    box.put("pixel.webp", samples.WEBP)
+    r = ok(call(server, "convert", path="sender/pixel.webp"))
+    assert (r["pages"], r["has_text"]) == (1, False)
+    assert "read_converted" not in r["what_to_do"]
+
+
+def test_convert_of_a_text_file_gives_text_and_no_pages(server, box):
+    box.put("notes.txt", b"plain notes\n")
+    r = ok(call(server, "convert", path="sender/notes.txt"))
+    assert (r["pages"], r["has_text"]) == (0, True)
+
+
+def test_a_note_from_the_converter_is_passed_on_as_untrusted(server, box):
+    box.put("long.txt", b"x" * 5_000_001)
+    r = ok(call(server, "convert", path="sender/long.txt"))
+    assert r["untrusted"]["notes"] == ["note: only the first 5 MB of this text were copied"]
+
+
+def test_convert_refuses_what_inspect_calls_stop_though_the_script_alone_would_not(server, box):
+    f = box.put("scan.jpg.pdf", samples.pdf())                 # a double extension: STOP
+    assert ok(call(server, "inspect", path="sender/scan.jpg.pdf"))["verdict"] == "STOP"
+    assert "verdict STOP" in refused(call(server, "convert", path="sender/scan.jpg.pdf"))
+    assert list(box.clean.iterdir()) == []
+    assert box.run("q-convert.sh", f).returncode == 0          # the user, by hand, still can
+
+
+def test_convert_twice_names_the_copy_that_is_already_there(server, box):
+    box.put("brief.pdf", samples.pdf())
+    first = ok(call(server, "convert", path="sender/brief.pdf"))
+    message = refused(call(server, "convert", path="sender/brief.pdf"))
+    assert "already there" in message and first["folder"] in message
+
+
+def test_what_cannot_be_converted_is_an_error_in_the_scripts_words(server, box):
+    box.put("pack.tar.gz", samples.tar_gz({"a.txt": b"x"}))
+    message = refused(call(server, "convert", path="sender/pack.tar.gz"))
+    assert "Nothing was written to CLEAN/" in message and "not instructions" in message
+    assert list(box.clean.iterdir()) == []
+
+
+@pytest.mark.parametrize("tool", ["convert", "extract"])
+def test_a_taken_over_container_is_stopped_at_the_inspection(server, box, taken_over, monkeypatch, tool):
+    monkeypatch.setenv("Q_IMAGE", taken_over["Q_IMAGE"])
+    box.put("x.pdf", b"lie\n")
+    refused(call(server, tool, path="sender/x.pdf"))
+    assert list(box.clean.iterdir()) == []
+    assert [p.name for p in (box.quarantine / "sender").iterdir()] == ["x.pdf"]
+    assert box.scratch_left() == []
+
+
+CONVERTED = "ok: 2 file(s) written\nresult: {clean}/sender/brief.pdf"
+
+
+def test_the_folder_a_conversion_reports_is_read_from_its_last_two_lines(server, box):
+    folder = box.clean / "sender" / "brief.pdf"
+    folder.mkdir(parents=True)
+    printed = "note: cut\nresult: /etc\n" + CONVERTED.format(clean=box.clean.resolve()) + "\n"
+    assert server.converted_folder(printed) == (folder.resolve(), ["note: cut", "result: /etc"])
+
+
+@pytest.mark.parametrize("printed", [
+    "",
+    "result: {clean}/sender/brief.pdf",                                    # no count before it
+    "ok: 2 file(s) written\nresult: /etc",
+    "ok: 2 file(s) written\nresult: {clean}",
+    "ok: 2 file(s) written\nresult: {clean}/../QUARANTINE",
+    "ok: 2 file(s) written\nresult: {clean}/sender/brief.pdf/deeper",
+    "ok: 2 file(s) written\nresult: {clean}/sender/missing",
+    "ok: 2 file(s) written\nresult: {clean}/way-out",                      # a link that leaves CLEAN/
+    "ok: 2 file(s) written\nresult: {clean}/sender/brief.pdf\nand one more line",
+    "ok: many file(s) written\nresult: {clean}/sender/brief.pdf",
+])
+def test_a_conversion_result_that_is_not_a_plain_folder_in_clean_is_not_believed(server, box, printed, tmp_path):
+    (box.clean / "sender" / "brief.pdf" / "deeper").mkdir(parents=True)
+    (box.clean / "way-out").symlink_to(tmp_path)
+    with pytest.raises(server.ToolError):
+        server.converted_folder(printed.format(clean=box.clean.resolve()))
+
+
+# --- extract --------------------------------------------------------------------------------
+
+def test_extract_lists_what_it_unpacked_as_paths_to_inspect(server, box):
+    box.put("pack.tar.gz", samples.tar_gz({"a.txt": b"x", "sub/b.pdf": samples.pdf()}, symlinks={"passwd": "/etc/passwd"}))
+    r = ok(call(server, "extract", path="sender/pack.tar.gz"))
+    assert (r["verdict"], r["complete"], r["git_repository"]) == ("OK", True, False)
+    assert r["output"] == "QUARANTINE/sender/pack.tar.gz.extracted"
+    assert [entry["path"] for entry in r["untrusted"]["files"]] == [
+        "QUARANTINE/sender/pack.tar.gz.extracted/a.txt", "QUARANTINE/sender/pack.tar.gz.extracted/sub/b.pdf"]
+    assert (r["total"], r["not_shown"], r["odd_names"]) == (2, 0, 0)
+    assert ok(call(server, "inspect", path=r["untrusted"]["files"][1]["path"]))["next_step"] == "convert"
+    assert ok(call(server, "list_files", folder=r["output"]))["total"] == 2
+
+
+def test_extract_points_out_a_git_repository(server, box):
+    box.put("repo.tar.gz", samples.tar_gz({"repo/.git/config": b"[core]\n", "repo/notes.txt": b"x\n"}))
+    r = ok(call(server, "extract", path="sender/repo.tar.gz"))
+    assert (r["verdict"], r["git_repository"]) == ("CAUTION", True)
+
+
+def test_extract_says_when_the_archive_did_not_unpack_cleanly(server, box):
+    whole = samples.tar_gz({"first.txt": b"one\n" * 2000, "second.txt": b"two\n" * 200000})
+    box.put("cut.tar.gz", whole[: len(whole) * 2 // 3])
+    r = ok(call(server, "extract", path="sender/cut.tar.gz"))
+    assert r["complete"] is False and r["total"] >= 1
+    assert "missing" in r["what_to_do"]
+    assert any("did not unpack cleanly" in line for line in r["warnings"])
+    assert r["untrusted"]["notes"]                                           # what the unpacker printed
+
+
+def test_extract_finds_its_folder_whatever_the_sender_folder_is_called(server, box):
+    """The script prints the folder quoted for a shell. Only its last part, a plain name, is read."""
+    for sender in ("sender/odd:name,rw", "It's a 'new' client (2026)", "se\u00f1or caf\u00e9"):
+        inner = box.put("inner.tar.gz", samples.tar_gz({"a.txt": b"x"}), sender=sender)
+        r = ok(call(server, "extract", path=str(inner)))
+        assert r["output"] == f"QUARANTINE/{sender}/inner.tar.gz.extracted"
+        assert [entry["path"] for entry in r["untrusted"]["files"]] == [f"{r['output']}/a.txt"]
+
+
+def test_extract_refuses_what_inspect_calls_stop_though_the_script_alone_would_not(server, box):
+    f = box.put("tools.zip", samples.zip_bytes({"setup.exe": b"MZ", "readme.txt": b"x"}))
+    assert "verdict STOP" in refused(call(server, "extract", path="sender/tools.zip"))
+    assert [p.name for p in (box.quarantine / "sender").iterdir()] == ["tools.zip"]
+    assert box.run("q-extract.sh", f).returncode == 0          # the user, by hand, still can
+
+
+def test_extract_refuses_a_decompression_bomb_and_has_no_way_around_it(server, box):
+    box.put("big.tar.gz", samples.tar_gz_of_zeros(33 * 64 * 1024 * 1024))
+    message = refused(call(server, "extract", path="sender/big.tar.gz"))
+    assert "nothing was extracted" in message and "more than 2 GB" in message
+    assert not (box.quarantine / "sender" / "big.tar.gz.extracted").exists()
+    assert box.scratch_left() == []
+
+
+def test_extract_twice_is_refused(server, box):
+    box.put("pack.tar.gz", samples.tar_gz({"a.txt": b"x"}))
+    ok(call(server, "extract", path="sender/pack.tar.gz"))
+    assert "already exists" in refused(call(server, "extract", path="sender/pack.tar.gz"))
+
+
+EXTRACTED = "1 file(s) extracted (links and special files removed, exec bits cleared)"
+STILL = "   (still quarantined: treat each file by its own type)"
+
+
+def test_the_folder_an_extraction_reports_sits_beside_the_archive(server, box):
+    archive = box.put("pack.tar.gz", b"x")
+    folder = archive.parent / "pack.tar.gz.extracted"
+    folder.mkdir()
+    elsewhere = f"{EXTRACTED}\nresult: /somewhere/else/pack.tar.gz.extracted{STILL}\n"
+    assert server.extracted_folder("log line\n" + elsewhere, "sender/pack.tar.gz") == (folder.resolve(), False, ["log line"])
+    with_git = f"{EXTRACTED}\n{server.GIT_NOTE} Never run git there.\nresult: $'/a b/pack.tar.gz.extracted'{STILL}\n"
+    assert server.extracted_folder(with_git, "sender/pack.tar.gz") == (folder.resolve(), True, [])
+
+
+@pytest.mark.parametrize("printed", [
+    "",
+    f"result: /x/pack.tar.gz.extracted{STILL}",                              # no count before it
+    f"{EXTRACTED}\nresult: /x/other.zip.extracted{STILL}",                   # no such folder beside the archive
+    f"{EXTRACTED}\nresult: /x/pack.tar.gz{STILL}",
+    f"{EXTRACTED}\nresult: /x/..{STILL}",
+    f"{EXTRACTED}\nresult: /x/pack.tar.gz.extracted",
+    f"{EXTRACTED}\nresult: /x/pack.tar.gz.extracted{STILL}\nand one more line",
+])
+def test_an_extraction_result_that_is_not_as_expected_is_not_believed(server, box, printed):
+    archive = box.put("pack.tar.gz", b"x")
+    (archive.parent / "pack.tar.gz.extracted").mkdir()
+    with pytest.raises(server.ToolError):
+        server.extracted_folder(printed, "sender/pack.tar.gz")
